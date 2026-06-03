@@ -276,7 +276,7 @@ requires-dist = [
     { name = "flowmesh-hook", specifier = ">=0.1.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lumid-hooks", specifier = ">=0.2.0" },
-    { name = "lumilake-hook", specifier = ">=0.1.2" },
+    { name = "lumilake-hook", git = "https://github.com/mlsys-io/lumilake_OSS.git?subdirectory=packages%2Fhook&rev=bb447625010c9aa942fee0df7bec85d10a09eae3" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -289,13 +289,9 @@ provides-extras = ["dev"]
 [[package]]
 name = "lumilake-hook"
 version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/mlsys-io/lumilake_OSS.git?subdirectory=packages%2Fhook&rev=bb447625010c9aa942fee0df7bec85d10a09eae3#bb447625010c9aa942fee0df7bec85d10a09eae3" }
 dependencies = [
     { name = "lumid-hooks" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/95/36/7a919dd88d541ce833247e14b6c20ee5ef4df013e84dd177e2b5228d4303/lumilake_hook-0.1.2.tar.gz", hash = "sha256:05bc424c7cc4814c1a694d52f8472171df7a6250d3243048cfcd620e0ef4bab5", size = 6104, upload-time = "2026-05-30T15:32:28.972Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/b4/a28a8f66ca6543a00026b0b58cd4fb8d11e0b2dd7e3d3ae3b781b9f42a37/lumilake_hook-0.1.2-py3-none-any.whl", hash = "sha256:ca6d38f8ce8e7c799680a01f04c97d9c5afa9d74a50ec8f12abb4b0a5525db33", size = 6730, upload-time = "2026-05-30T15:32:23.826Z" },
 ]
 
 [[package]]
