@@ -1,6 +1,7 @@
 from typing import Any
 
 import httpx
+from lumilake import envs
 from lumilake_server.runtime.optimizer.base import BaseOptimizer
 from lumilake_server.runtime.optimizer.remote import RemoteOptimizer
 
@@ -8,12 +9,16 @@ from lumilake_server.runtime.optimizer.remote import RemoteOptimizer
 class RemoteOptimizerProvider:
     """OptimizerProvider that lists + instantiates remote-hosted optimizers.
 
-    One-shot list at install; no retry, no TTL.
+    One-shot list at install; no retry, no TTL. The install-time catalog
+    probe uses ``LUMILAKE_RUNTIME_TOKEN`` (the scheduler-internal credential
+    Lumilake already configures for system-level upstream reads). Per-job
+    schedule calls inherit upstream :class:`RemoteOptimizer`'s behavior of
+    forwarding the request's ``runtime_token_var`` — i.e. the submitter's
+    own lum.id bearer — so each schedule is attributed to the real user.
     """
 
-    def __init__(self, base_url: str, bearer: str | None = None) -> None:
+    def __init__(self, base_url: str) -> None:
         self._base_url = base_url
-        self._bearer = bearer
         self._types: list[str] | None = None
 
     def list_optimizers(self) -> list[str]:
@@ -34,8 +39,9 @@ class RemoteOptimizerProvider:
     def _fetch_remote_types(self) -> list[str]:
         url = f"{self._base_url.rstrip('/')}/api/v1/optimizer"
         headers: dict[str, str] = {}
-        if self._bearer:
-            headers["Authorization"] = f"Bearer {self._bearer}"
+        runtime_token = envs.RUNTIME_TOKEN
+        if runtime_token:
+            headers["Authorization"] = f"Bearer {runtime_token}"
         try:
             resp = httpx.get(url, headers=headers, timeout=10.0)
             resp.raise_for_status()

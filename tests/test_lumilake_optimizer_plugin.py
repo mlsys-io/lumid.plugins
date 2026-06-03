@@ -50,6 +50,16 @@ def _install_stubs(monkeypatch: pytest.MonkeyPatch) -> type[_FakeRemoteOptimizer
     monkeypatch.setitem(sys.modules, "lumilake_server.runtime.optimizer.base", base_mod)
     monkeypatch.setitem(sys.modules, "lumilake_server.runtime.optimizer.remote", remote_mod)
 
+    # ``lumilake.envs`` is provided by the lumilake SDK in production; stub it
+    # here so the standalone test env doesn't need that dep. Default token is
+    # None; tests that need one set ``envs.RUNTIME_TOKEN`` via monkeypatch.
+    lumilake_mod = types.ModuleType("lumilake")
+    envs_mod = types.ModuleType("lumilake.envs")
+    envs_mod.RUNTIME_TOKEN = None  # type: ignore[attr-defined]
+    lumilake_mod.envs = envs_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "lumilake", lumilake_mod)
+    monkeypatch.setitem(sys.modules, "lumilake.envs", envs_mod)
+
     # Evict the plugin and provider from sys.modules so each test gets a clean import.
     monkeypatch.delitem(sys.modules, "lumid_lumilake_plugin", raising=False)
     monkeypatch.delitem(sys.modules, "lumid_lumilake_plugin.optimizer", raising=False)
@@ -75,7 +85,7 @@ def test_install_skips_optimizer_when_url_missing(monkeypatch: pytest.MonkeyPatc
 def test_install_raises_when_remote_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
         import lumid_lumilake_plugin as plugin
@@ -88,7 +98,7 @@ def test_install_raises_when_remote_unreachable(monkeypatch: pytest.MonkeyPatch)
 def test_install_returns_provider_with_remote_types(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"types": ["halo-greedy", "halo-helium"]}
@@ -108,7 +118,7 @@ def test_install_returns_provider_with_remote_types(monkeypatch: pytest.MonkeyPa
 def test_provider_list_optimizers_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     call_count = 0
 
@@ -139,7 +149,7 @@ def test_provider_create_optimizer_returns_RemoteOptimizer(
 ) -> None:
     remote_cls = _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"types": ["halo-greedy", "halo-helium"]}
@@ -161,7 +171,7 @@ def test_provider_create_optimizer_rejects_unknown_type(
 ) -> None:
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"types": ["halo-greedy"]}
@@ -179,10 +189,17 @@ def test_provider_create_optimizer_rejects_unknown_type(
     assert "halo-greedy" in str(exc.value)
 
 
-def test_install_forwards_bearer_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_install_forwards_runtime_token_to_catalog_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The install-time catalog probe forwards LUMILAKE_RUNTIME_TOKEN as the
+    Bearer header so the remote can authenticate this scheduler-internal call.
+    Per-job schedule calls follow a different path (upstream ``RemoteOptimizer``
+    reads ``runtime_token_var`` set by the auth middleware), so this token is
+    never used to attribute user-submitted jobs."""
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", "my-service-token")
+    sys.modules["lumilake.envs"].RUNTIME_TOKEN = "scheduler-internal-token"  # type: ignore[attr-defined]
 
     captured_headers: dict[str, str] = {}
 
@@ -199,7 +216,7 @@ def test_install_forwards_bearer_when_set(monkeypatch: pytest.MonkeyPatch) -> No
 
         plugin.install()
 
-    assert captured_headers.get("Authorization") == "Bearer my-service-token"
+    assert captured_headers.get("Authorization") == "Bearer scheduler-internal-token"
 
 
 @pytest.mark.parametrize(
@@ -214,7 +231,7 @@ def test_install_response_shape_validation(
 ) -> None:
     _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_BEARER", raising=False)
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = body

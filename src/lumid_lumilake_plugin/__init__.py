@@ -71,8 +71,7 @@ def install() -> BaseBindings:
         # is loaded for identity- or jobs-only use cases.
         from .optimizer import RemoteOptimizerProvider
 
-        bearer = os.environ.get("LUMILAKE_REMOTE_OPTIMIZER_BEARER") or None
-        provider = RemoteOptimizerProvider(base_url=url, bearer=bearer)
+        provider = RemoteOptimizerProvider(base_url=url)
         provider.list_optimizers()
         optimizer_providers = (provider,)
 
