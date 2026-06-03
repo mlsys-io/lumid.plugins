@@ -1,6 +1,6 @@
 [project]
 name = "lumid-plugins"
-version = "0.2.1"
+version = "0.2.2"
 description = "lum.id host plugins for FlowMesh and Lumilake (lum.id identity, Runmesh billing, and supplier attribution)."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -60,4 +60,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "lumilake_hook"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "lumilake_server.*"
 ignore_missing_imports = true
