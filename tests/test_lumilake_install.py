@@ -11,38 +11,50 @@ from lumid_lumilake_plugin import install
 from lumid_lumilake_plugin._core import LumidIdentityProvider
 
 
-def test_install_returns_lumilake_basebindings(
+async def test_install_returns_lumilake_basebindings(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("LUM_ID_BASE_URL", "https://lum.id")
-    bindings = install()
-    assert isinstance(bindings, LumilakeBaseBindings)
-    assert isinstance(bindings, SharedHookBindings)
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
+    async with install() as bindings:
+        assert isinstance(bindings, LumilakeBaseBindings)
+        assert isinstance(bindings, SharedHookBindings)
 
 
-def test_install_exposes_only_identity_provider(
+async def test_install_registers_identity_and_jobs_auth(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("LUM_ID_BASE_URL", "https://lum.id")
-    bindings = install()
-    assert len(bindings.identity_providers) == 1
-    assert isinstance(bindings.identity_providers[0], LumidIdentityProvider)
-    assert len(bindings.submission_guards) == 0
-    assert len(bindings.usage_sinks) == 0
-    assert len(bindings.permission_checkers) == 0
-    assert len(bindings.resource_registrars) == 0
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
+    async with install() as bindings:
+        assert len(bindings.identity_providers) == 1
+        assert isinstance(bindings.identity_providers[0], LumidIdentityProvider)
+        assert len(bindings.submission_guards) == 0
+        assert len(bindings.usage_sinks) == 0
+        assert len(bindings.permission_checkers) == 1
+        assert len(bindings.resource_registrars) == 1
 
 
-def test_identity_name_is_lumilake_scoped(
+async def test_identity_name_is_lumilake_scoped(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     monkeypatch.setenv("LUM_ID_BASE_URL", "https://lum.id")
-    identity = install().identity_providers[0]
-    assert identity.name == "lumid_lumilake_plugin.identity"
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
+    async with install() as bindings:
+        identity = bindings.identity_providers[0]
+        assert identity.name == "lumid_lumilake_plugin.identity"
 
 
-def test_install_reads_org_id_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_install_reads_org_id_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
     monkeypatch.setenv("LUM_ID_BASE_URL", "https://lum.id")
     monkeypatch.setenv("LUMID_ORG_ID", "lumid-prod")
-    identity = install().identity_providers[0]
-    assert identity._org_id == "lumid-prod"
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
+    async with install() as bindings:
+        identity = bindings.identity_providers[0]
+        assert identity._org_id == "lumid-prod"

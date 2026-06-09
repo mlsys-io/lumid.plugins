@@ -54,17 +54,17 @@ ADMIN = ResourceAction.ADMIN.value
 # ---------------------------------------------------------------------------
 
 
-def test_install_returns_basebindings_with_checker_and_registrar(
+async def test_install_returns_basebindings_with_checker_and_registrar(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
 
-    monkeypatch.setenv("LUMID_LUMILAKE_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
-    bindings = install()
-    assert isinstance(bindings, BaseBindings)
-    assert len(bindings.permission_checkers) == 1
-    assert len(bindings.resource_registrars) == 1
-    assert isinstance(bindings.permission_checkers[0], LumidPermissionChecker)
-    assert isinstance(bindings.resource_registrars[0], LumidResourceRegistrar)
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
+    async with install() as bindings:
+        assert isinstance(bindings, BaseBindings)
+        assert len(bindings.permission_checkers) == 1
+        assert len(bindings.resource_registrars) == 1
+        assert isinstance(bindings.permission_checkers[0], LumidPermissionChecker)
+        assert isinstance(bindings.resource_registrars[0], LumidResourceRegistrar)
 
 
 # ---------------------------------------------------------------------------
@@ -72,23 +72,16 @@ def test_install_returns_basebindings_with_checker_and_registrar(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "admin_scope", ["*", "lumilake:*", "lumilake:admin", "flowmesh:admin"]
-)
+@pytest.mark.parametrize("admin_scope", ["*", "lumilake:*", "lumilake:admin", "flowmesh:admin"])
 async def test_admin_bypass_all_actions(
     store: GrantStore, log: logging.Logger, admin_scope: str
 ) -> None:
     checker = LumidPermissionChecker(store)
-    await checker.require(
-        _principal("alice", admin_scope), ResourceRef(kind=JOB), READ, log
-    )
+    await checker.require(_principal("alice", admin_scope), ResourceRef(kind=JOB), READ, log)
     await checker.require(
         _principal("alice", admin_scope), ResourceRef(kind=JOB, id="j-1"), WRITE, log
     )
-    assert (
-        await checker.accessible_ids(_principal("alice", admin_scope), JOB, READ, log)
-        is None
-    )
+    assert await checker.accessible_ids(_principal("alice", admin_scope), JOB, READ, log) is None
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +115,7 @@ async def test_kind_level_read_scope_does_not_allow_write(
     assert exc.value.status_code == 403
 
 
-async def test_kind_level_no_scope_denies(
-    store: GrantStore, log: logging.Logger
-) -> None:
+async def test_kind_level_no_scope_denies(store: GrantStore, log: logging.Logger) -> None:
     checker = LumidPermissionChecker(store)
     with pytest.raises(HTTPException) as exc:
         await checker.require(_principal("alice"), ResourceRef(kind=JOB), READ, log)
@@ -136,9 +127,7 @@ async def test_kind_level_no_scope_denies(
 # ---------------------------------------------------------------------------
 
 
-async def test_concrete_id_with_grant_allowed(
-    store: GrantStore, log: logging.Logger
-) -> None:
+async def test_concrete_id_with_grant_allowed(store: GrantStore, log: logging.Logger) -> None:
     checker = LumidPermissionChecker(store)
     await store.grant(JOB, "j-1", "alice", GrantLevel.WRITE)
     for action in (READ, WRITE, CANCEL):
@@ -150,15 +139,11 @@ async def test_concrete_id_without_scope_or_grant_denied(
 ) -> None:
     checker = LumidPermissionChecker(store)
     with pytest.raises(HTTPException) as exc:
-        await checker.require(
-            _principal("alice"), ResourceRef(kind=JOB, id="j-99"), READ, log
-        )
+        await checker.require(_principal("alice"), ResourceRef(kind=JOB, id="j-99"), READ, log)
     assert exc.value.status_code == 403
 
 
-async def test_concrete_id_non_owner_denied(
-    store: GrantStore, log: logging.Logger
-) -> None:
+async def test_concrete_id_non_owner_denied(store: GrantStore, log: logging.Logger) -> None:
     checker = LumidPermissionChecker(store)
     await store.grant(JOB, "j-1", "alice", GrantLevel.WRITE)
     with pytest.raises(HTTPException) as exc:
@@ -172,9 +157,7 @@ async def test_concrete_id_admin_action_is_admin_only(
     checker = LumidPermissionChecker(store)
     await store.grant(JOB, "j-1", "alice", GrantLevel.WRITE)
     with pytest.raises(HTTPException) as exc:
-        await checker.require(
-            _principal("alice"), ResourceRef(kind=JOB, id="j-1"), ADMIN, log
-        )
+        await checker.require(_principal("alice"), ResourceRef(kind=JOB, id="j-1"), ADMIN, log)
     assert exc.value.status_code == 403
     assert "admin-only" in exc.value.detail
 
@@ -184,9 +167,7 @@ async def test_concrete_id_admin_action_is_admin_only(
 # ---------------------------------------------------------------------------
 
 
-async def test_registrar_register_writes_grant(
-    store: GrantStore, log: logging.Logger
-) -> None:
+async def test_registrar_register_writes_grant(store: GrantStore, log: logging.Logger) -> None:
 
     reg = LumidResourceRegistrar(store, datetime.now(UTC))
     await reg.register(_principal("alice"), ResourceRef(kind=JOB, id="j-1"), log)
@@ -241,21 +222,22 @@ async def test_registrar_kind_level_register_is_noop(
 # ---------------------------------------------------------------------------
 
 
-def test_install_creates_parent_dir_when_missing(
+async def test_install_creates_parent_dir_when_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "nested" / "subdir" / "acl.sqlite"
-    monkeypatch.setenv("LUMID_LUMILAKE_ACL_DB_PATH", str(db_path))
-    install()
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(db_path))
+    async with install():
+        pass
     assert db_path.exists()
     assert db_path.parent.is_dir()
 
 
-def test_install_raises_when_parent_unwritable(
+async def test_install_raises_when_parent_unwritable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "nested" / "acl.sqlite"
-    monkeypatch.setenv("LUMID_LUMILAKE_ACL_DB_PATH", str(db_path))
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(db_path))
 
     original_mkdir = Path.mkdir
 
@@ -263,13 +245,14 @@ def test_install_raises_when_parent_unwritable(
         raise PermissionError("read-only filesystem")
 
     monkeypatch.setattr(Path, "mkdir", _failing_mkdir)
-    with pytest.raises(RuntimeError, match="LUMID_LUMILAKE_ACL_DB_PATH"):
-        install()
+    with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
+        async with install():
+            pass
 
     monkeypatch.setattr(Path, "mkdir", original_mkdir)
 
 
-def test_install_raises_when_db_exists_but_unwritable(
+async def test_install_raises_when_db_exists_but_unwritable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Regression test: pre-existing but read-only DB must not cause fail-open.
@@ -309,16 +292,14 @@ def test_install_raises_when_db_exists_but_unwritable(
             /,
         ) -> sqlite3.Cursor:
             if sql.strip().upper() == "BEGIN IMMEDIATE":
-                raise sqlite3.OperationalError(
-                    "attempt to write a readonly database"
-                )
+                raise sqlite3.OperationalError("attempt to write a readonly database")
             # parameters is typed as `object` (wider than the stub's
             # SupportsLenAndGetItem | Mapping) so we need to suppress here;
             # at runtime sqlite3 accepts () as the default fine.
             return super().execute(sql, parameters)  # type: ignore[arg-type]
 
     db_path = tmp_path / "existing_acl.sqlite"
-    monkeypatch.setenv("LUMID_LUMILAKE_ACL_DB_PATH", str(db_path))
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(db_path))
 
     # Bootstrap the schema so the DB file exists before install() is called.
     open_store_sync(db_path)
@@ -342,8 +323,9 @@ def test_install_raises_when_db_exists_but_unwritable(
 
     monkeypatch.setattr(acl_module, "_connect", _patched_connect)
 
-    with pytest.raises(RuntimeError, match="LUMID_LUMILAKE_ACL_DB_PATH"):
-        install()
+    with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
+        async with install():
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -351,9 +333,7 @@ def test_install_raises_when_db_exists_but_unwritable(
 # ---------------------------------------------------------------------------
 
 
-async def test_reconcile_scoped_to_input_kinds(
-    tmp_path: Path, log: logging.Logger
-) -> None:
+async def test_reconcile_scoped_to_input_kinds(tmp_path: Path, log: logging.Logger) -> None:
     # Verifies two properties in one sweep:
     # 1. Stale grants within an input kind (j-2) are dropped.
     # 2. Grants for kinds absent from the input (ARTIFACT, TRACE) are untouched.
@@ -374,15 +354,13 @@ async def test_reconcile_scoped_to_input_kinds(
         # Reconcile with only j-1; j-2 is stale within the JOB kind.
         await reg.reconcile([ResourceRef(kind=JOB, id="j-1")], log)
 
-        assert await s.has_grant(JOB, "j-1", "alice") is True   # present in input — survives
+        assert await s.has_grant(JOB, "j-1", "alice") is True  # present in input — survives
         assert await s.has_grant(JOB, "j-2", "alice") is False  # absent from input — dropped
         assert await s.has_grant(ARTIFACT, "a-1", "alice") is True  # kind not in input — untouched
-        assert await s.has_grant(TRACE, "t-1", "alice") is True     # kind not in input — untouched
+        assert await s.has_grant(TRACE, "t-1", "alice") is True  # kind not in input — untouched
 
 
-async def test_reconcile_empty_input_is_noop(
-    tmp_path: Path, log: logging.Logger
-) -> None:
+async def test_reconcile_empty_input_is_noop(tmp_path: Path, log: logging.Logger) -> None:
     db_path = tmp_path / "acl.sqlite"
     async with open_store(db_path) as s:
         reg = LumidResourceRegistrar(s, datetime.now(UTC))
@@ -395,3 +373,51 @@ async def test_reconcile_empty_input_is_noop(
         await reg.reconcile([], log)
 
         assert await s.has_grant(JOB, "j-1", "alice") is True
+
+
+# ---------------------------------------------------------------------------
+# open_store writability probe (moved out of install())
+# ---------------------------------------------------------------------------
+
+
+async def test_open_store_async_raises_when_db_unwritable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The writability probe lives in ``open_store`` itself so every caller
+    (install + future direct callers) benefits without duplicating the BEGIN
+    IMMEDIATE dance."""
+    import lumid_lumilake_plugin.acl as acl_module
+
+    class _ReadOnlyConn(sqlite3.Connection):
+        def execute(
+            self,
+            sql: str,
+            parameters: object = (),
+            /,
+        ) -> sqlite3.Cursor:
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return super().execute(sql, parameters)  # type: ignore[arg-type]
+
+    db_path = tmp_path / "ro_acl.sqlite"
+    # Bootstrap schema with the real _connect first.
+    open_store_sync(db_path)
+
+    def _patched_connect(path: object) -> sqlite3.Connection:
+        from pathlib import Path as _Path
+
+        _Path(path).parent.mkdir(parents=True, exist_ok=True)  # type: ignore[arg-type]
+        conn = sqlite3.connect(
+            str(path),
+            check_same_thread=False,
+            isolation_level=None,
+            factory=_ReadOnlyConn,
+        )
+        conn.executescript(acl_module._SCHEMA)
+        return conn
+
+    monkeypatch.setattr(acl_module, "_connect", _patched_connect)
+
+    with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
+        async with open_store(db_path):
+            pass

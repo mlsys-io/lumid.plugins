@@ -1,13 +1,12 @@
-"""Tests for lumid_lumilake_plugin.
+"""Tests for ``lumid_lumilake_plugin`` optimizer surface.
 
-``lumilake_server`` is not installed in the lumid.plugin test environment (this
-repo is standalone). Each test stubs the required modules in ``sys.modules``
-before triggering the import, then restores the original state with
-``monkeypatch``.
+The plugin imports ``RemoteOptimizer`` / ``OptimizerHandle`` from
+``lumilake_hook`` at module top, so this repo's standalone test environment
+only needs ``lumilake-hook`` installed; no ``lumilake_server`` stubs are
+required. Tests that want to assert what the provider passes to
+``RemoteOptimizer`` patch the symbol on the plugin module directly.
 """
 
-import sys
-import types
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -15,88 +14,57 @@ import httpx
 import pytest
 from lumilake_hook import BaseBindings
 
-# ---------------------------------------------------------------------------
-# Stub helpers
-# ---------------------------------------------------------------------------
+import lumid_lumilake_plugin as plugin
+import lumid_lumilake_plugin.optimizer as plugin_optimizer
 
 
-class _FakeBaseOptimizer:
-    pass
+class _FakeRemoteOptimizer:
+    """Stand-in used when a test wants to capture the kwargs the provider
+    forwards. Mirrors ``lumilake_hook.RemoteOptimizer``'s keyword-only init
+    surface so the provider call site is exercised unchanged.
+    """
 
-
-class _FakeRemoteOptimizer(_FakeBaseOptimizer):
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
 
 
-def _install_stubs(monkeypatch: pytest.MonkeyPatch) -> type[_FakeRemoteOptimizer]:
-    """Inject stub modules so the optimizer plugin can be imported cleanly.
-
-    Returns the RemoteOptimizer stub class so tests can assert isinstance checks.
-    """
-    # lumilake_server hierarchy
-    server_mod = types.ModuleType("lumilake_server")
-    runtime_mod = types.ModuleType("lumilake_server.runtime")
-    opt_mod = types.ModuleType("lumilake_server.runtime.optimizer")
-    base_mod = types.ModuleType("lumilake_server.runtime.optimizer.base")
-    remote_mod = types.ModuleType("lumilake_server.runtime.optimizer.remote")
-
-    base_mod.BaseOptimizer = _FakeBaseOptimizer  # type: ignore[attr-defined]
-    remote_mod.RemoteOptimizer = _FakeRemoteOptimizer  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, "lumilake_server", server_mod)
-    monkeypatch.setitem(sys.modules, "lumilake_server.runtime", runtime_mod)
-    monkeypatch.setitem(sys.modules, "lumilake_server.runtime.optimizer", opt_mod)
-    monkeypatch.setitem(sys.modules, "lumilake_server.runtime.optimizer.base", base_mod)
-    monkeypatch.setitem(sys.modules, "lumilake_server.runtime.optimizer.remote", remote_mod)
-
-    # ``lumilake.envs`` is provided by the lumilake SDK in production; stub it
-    # here so the standalone test env doesn't need that dep. Default token is
-    # None; tests that need one set ``envs.RUNTIME_TOKEN`` via monkeypatch.
-    lumilake_mod = types.ModuleType("lumilake")
-    envs_mod = types.ModuleType("lumilake.envs")
-    envs_mod.RUNTIME_TOKEN = None  # type: ignore[attr-defined]
-    lumilake_mod.envs = envs_mod  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "lumilake", lumilake_mod)
-    monkeypatch.setitem(sys.modules, "lumilake.envs", envs_mod)
-
-    # Evict the plugin and provider from sys.modules so each test gets a clean import.
-    monkeypatch.delitem(sys.modules, "lumid_lumilake_plugin", raising=False)
-    monkeypatch.delitem(sys.modules, "lumid_lumilake_plugin.optimizer", raising=False)
-
-    return _FakeRemoteOptimizer
+@pytest.fixture(autouse=True)
+def _writable_acl_db(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """``install()`` always opens the ACL store (FlowMesh-parity), so every
+    test in this module needs a writable ``LUMID_ACL_DB_PATH``."""
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", str(tmp_path / "acl.sqlite"))
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+# install() — async context manager
 
 
-def test_install_skips_optimizer_when_url_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_stubs(monkeypatch)
+async def test_install_skips_optimizer_when_url_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_URL", raising=False)
 
-    import lumid_lumilake_plugin as plugin
-
-    bindings = plugin.install()
-    assert bindings.optimizer_providers == ()
+    async with plugin.install() as bindings:
+        assert bindings.optimizer_providers == ()
 
 
-def test_install_raises_when_remote_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_stubs(monkeypatch)
+async def test_install_raises_when_remote_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
-    with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
-        import lumid_lumilake_plugin as plugin
-
-        with pytest.raises(RuntimeError) as exc:
-            plugin.install()
+    with (
+        patch("httpx.get", side_effect=httpx.ConnectError("connection refused")),
+        pytest.raises(RuntimeError) as exc,
+    ):
+        async with plugin.install():
+            pass
     assert "/api/v1/optimizer" in str(exc.value)
 
 
-def test_install_returns_provider_with_remote_types(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_stubs(monkeypatch)
+async def test_install_returns_provider_with_remote_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
@@ -105,18 +73,19 @@ def test_install_returns_provider_with_remote_types(monkeypatch: pytest.MonkeyPa
     mock_resp.raise_for_status = MagicMock()
 
     with patch("httpx.get", return_value=mock_resp):
-        import lumid_lumilake_plugin as plugin
+        async with plugin.install() as bindings:
+            assert isinstance(bindings, BaseBindings)
+            assert len(bindings.optimizer_providers) == 1
+            provider = bindings.optimizer_providers[0]
+            assert sorted(provider.list_optimizers()) == [
+                "halo-greedy",
+                "halo-helium",
+            ]
 
-        bindings = plugin.install()
 
-    assert isinstance(bindings, BaseBindings)
-    assert len(bindings.optimizer_providers) == 1
-    provider = bindings.optimizer_providers[0]
-    assert sorted(provider.list_optimizers()) == ["halo-greedy", "halo-helium"]
-
-
-def test_provider_list_optimizers_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install_stubs(monkeypatch)
+async def test_provider_list_optimizers_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
@@ -131,45 +100,42 @@ def test_provider_list_optimizers_is_cached(monkeypatch: pytest.MonkeyPatch) -> 
         return mock_resp
 
     with patch("httpx.get", side_effect=fake_get):
-        import lumid_lumilake_plugin as plugin
-
-        bindings = plugin.install()
-
-    provider = bindings.optimizer_providers[0]
-    # install() already called list_optimizers() once (the eager call)
-    assert call_count == 1
-    provider.list_optimizers()
-    provider.list_optimizers()
-    # No additional network calls after cache is warm
-    assert call_count == 1
+        async with plugin.install() as bindings:
+            provider = bindings.optimizer_providers[0]
+            # install() already called list_optimizers() once.
+            assert call_count == 1
+            provider.list_optimizers()
+            provider.list_optimizers()
+            assert call_count == 1
 
 
-def test_provider_create_optimizer_returns_RemoteOptimizer(
+async def test_provider_create_optimizer_returns_RemoteOptimizer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    remote_cls = _install_stubs(monkeypatch)
+    """``create_optimizer`` instantiates ``lumilake_hook.RemoteOptimizer``
+    via the plugin-module-level binding, so patching that binding lets us
+    capture the kwargs without contacting a real remote.
+    """
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setattr(plugin_optimizer, "RemoteOptimizer", _FakeRemoteOptimizer)
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"types": ["halo-greedy", "halo-helium"]}
     mock_resp.raise_for_status = MagicMock()
 
     with patch("httpx.get", return_value=mock_resp):
-        import lumid_lumilake_plugin as plugin
-
-        bindings = plugin.install()
-
-    provider = bindings.optimizer_providers[0]
-    result = provider.create_optimizer("halo-greedy")
-    assert isinstance(result, remote_cls)
-    assert result.kwargs.get("optimizer_type") == "halo-greedy"
+        async with plugin.install() as bindings:
+            provider = bindings.optimizer_providers[0]
+            result = provider.create_optimizer("halo-greedy")
+            assert isinstance(result, _FakeRemoteOptimizer)
+            assert result.kwargs.get("optimizer_type") == "halo-greedy"
+            assert result.kwargs.get("base_url") == "https://oaas.example.com"
 
 
-def test_provider_create_optimizer_rejects_unknown_type(
+async def test_provider_create_optimizer_rejects_unknown_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
@@ -178,32 +144,56 @@ def test_provider_create_optimizer_rejects_unknown_type(
     mock_resp.raise_for_status = MagicMock()
 
     with patch("httpx.get", return_value=mock_resp):
-        import lumid_lumilake_plugin as plugin
-
-        bindings = plugin.install()
-
-    provider = bindings.optimizer_providers[0]
-    with pytest.raises(ValueError) as exc:
-        provider.create_optimizer("unknown-type")
-    assert "unknown-type" in str(exc.value)
-    assert "halo-greedy" in str(exc.value)
+        async with plugin.install() as bindings:
+            provider = bindings.optimizer_providers[0]
+            with pytest.raises(ValueError) as exc:
+                provider.create_optimizer("unknown-type")
+            assert "unknown-type" in str(exc.value)
+            assert "halo-greedy" in str(exc.value)
 
 
-def test_install_forwards_runtime_token_to_catalog_probe(
+async def test_provider_create_optimizer_is_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OptimizerProvider Protocol: Lumilake lowercases the optimizer name
+    before dispatching. A remote advertising ``Halo-Greedy`` must accept
+    ``halo-greedy`` as the lookup key; the original casing must be forwarded
+    verbatim to ``RemoteOptimizer``.
+    """
+    monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setattr(plugin_optimizer, "RemoteOptimizer", _FakeRemoteOptimizer)
+
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"types": ["Halo-Greedy"]}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.get", return_value=mock_resp):
+        async with plugin.install() as bindings:
+            provider = bindings.optimizer_providers[0]
+            result = provider.create_optimizer("halo-greedy")
+            assert isinstance(result, _FakeRemoteOptimizer)
+            # Original casing forwarded unchanged.
+            assert result.kwargs.get("optimizer_type") == "halo-greedy"
+
+
+async def test_install_forwards_runtime_token_to_catalog_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The install-time catalog probe forwards LUMILAKE_RUNTIME_TOKEN as the
     Bearer header so the remote can authenticate this scheduler-internal call.
-    Per-job schedule calls follow a different path (upstream ``RemoteOptimizer``
-    reads ``runtime_token_var`` set by the auth middleware), so this token is
-    never used to attribute user-submitted jobs."""
-    _install_stubs(monkeypatch)
+    Per-job schedule calls follow a different path (``RemoteOptimizer`` reads
+    ``runtime_token_var`` set by the auth middleware), so this token is never
+    used to attribute user-submitted jobs.
+    """
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
-    sys.modules["lumilake.envs"].RUNTIME_TOKEN = "scheduler-internal-token"  # type: ignore[attr-defined]
+    monkeypatch.setenv("LUMILAKE_RUNTIME_TOKEN", "scheduler-internal-token")
 
     captured_headers: dict[str, str] = {}
 
-    def fake_get(url: str, headers: dict[str, str] | None = None, **kwargs: Any) -> MagicMock:
+    def fake_get(
+        url: str, headers: dict[str, str] | None = None, **kwargs: Any
+    ) -> MagicMock:
         if headers:
             captured_headers.update(headers)
         mock_resp = MagicMock()
@@ -212,9 +202,8 @@ def test_install_forwards_runtime_token_to_catalog_probe(
         return mock_resp
 
     with patch("httpx.get", side_effect=fake_get):
-        import lumid_lumilake_plugin as plugin
-
-        plugin.install()
+        async with plugin.install():
+            pass
 
     assert captured_headers.get("Authorization") == "Bearer scheduler-internal-token"
 
@@ -222,14 +211,14 @@ def test_install_forwards_runtime_token_to_catalog_probe(
 @pytest.mark.parametrize(
     "body",
     [
-        {"optimizer_list": ["halo-greedy"]},  # missing "types" key
-        {"types": [1, 2, 3]},                 # non-string elements
+        {"optimizer_list": ["halo-greedy"]},  # dict with missing "types" key
+        {"types": [1, 2, 3]},  # non-string elements
+        ["bare", "list"],  # not a dict at all
     ],
 )
-def test_install_response_shape_validation(
-    monkeypatch: pytest.MonkeyPatch, body: dict[str, object]
+async def test_install_response_shape_validation(
+    monkeypatch: pytest.MonkeyPatch, body: object
 ) -> None:
-    _install_stubs(monkeypatch)
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
 
@@ -237,9 +226,71 @@ def test_install_response_shape_validation(
     mock_resp.json.return_value = body
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("httpx.get", return_value=mock_resp):
-        import lumid_lumilake_plugin as plugin
-
-        with pytest.raises(RuntimeError) as exc:
-            plugin.install()
+    with patch("httpx.get", return_value=mock_resp), pytest.raises(RuntimeError) as exc:
+        async with plugin.install():
+            pass
     assert "unexpected response shape" in str(exc.value)
+
+
+# URL scheme validation
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.com",
+        "ftp://example.com",
+        "http://10.0.0.1:8080",
+    ],
+)
+def test_provider_rejects_non_https_non_loopback_urls(url: str) -> None:
+    from lumid_lumilake_plugin.optimizer import RemoteOptimizerProvider
+
+    with pytest.raises(ValueError, match="must use https://"):
+        RemoteOptimizerProvider(base_url=url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://oaas.example.com",
+        "http://localhost:8090",
+        "http://127.0.0.1:8090",
+        "http://[::1]:8090",
+    ],
+)
+def test_provider_accepts_https_and_loopback_http_urls(url: str) -> None:
+    """Constructor must accept https and loopback http without contacting the
+    remote (the probe happens in list_optimizers / install)."""
+    from lumid_lumilake_plugin.optimizer import RemoteOptimizerProvider
+
+    RemoteOptimizerProvider(base_url=url)
+
+
+# Settings.from_env()
+
+
+def test_settings_loads_both_optional_fields_from_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", "/tmp/some/acl.sqlite")
+    monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
+
+    from lumid_lumilake_plugin.config import Settings
+
+    s = Settings.from_env()
+    assert s.lumid_acl_db_path == "/tmp/some/acl.sqlite"
+    assert s.lumilake_remote_optimizer_url == "https://oaas.example.com"
+
+
+def test_settings_defaults_when_env_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMID_ACL_DB_PATH", raising=False)
+    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_URL", raising=False)
+
+    from lumid_lumilake_plugin.config import Settings
+
+    s = Settings.from_env()
+    assert s.lumid_acl_db_path == "/app/plugin-data/lumid_acl.sqlite"
+    assert s.lumilake_remote_optimizer_url == ""

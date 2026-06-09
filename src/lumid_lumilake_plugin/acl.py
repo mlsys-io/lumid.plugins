@@ -132,8 +132,17 @@ class GrantStore:
     ) -> tuple[int, int]:
         """Touch live grants, drop stale ones; return ``(touched, deleted)``.
 
-        ``session_start`` must be timezone-aware; captured at plugin-load time
-        so grants written between load and the reconcile call survive the sweep.
+        Deletion is scoped to kinds present in ``pairs`` — kinds absent from a
+        sweep (e.g. ``TRACE``/``ARTIFACT`` during a JOB-only call) are
+        preserved. Empty ``pairs`` returns ``(0, 0)`` without writing.
+
+        Diverges from the FlowMesh plugin's ``reconcile``, which sweeps all
+        kinds in one call and therefore deletes any stale row unconditionally.
+        Lumilake invokes ``reconcile_resources`` per-kind, so each call must
+        scope its deletions to that kind alone.
+
+        ``session_start`` must be timezone-aware; capture it at plugin-load so
+        grants written between load and reconcile survive the sweep.
         """
         if session_start.tzinfo is None:
             raise ValueError("session_start must be timezone-aware")
@@ -201,16 +210,61 @@ class GrantStore:
         return rows
 
 
+def _assert_writable(conn: sqlite3.Connection, db_path: str | Path) -> None:
+    """Probe write access by acquiring (and releasing) a RESERVED write lock.
+
+    A deferred ``BEGIN`` would silently succeed on a read-only file because
+    SQLite defers write-lock acquisition to the first real write statement;
+    ``BEGIN IMMEDIATE`` acquires the lock up front so a read-only file fails
+    here rather than at first-write time.
+    """
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("ROLLBACK")
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"lumid_lumilake_plugin: ACL DB at {str(db_path)!r} is not "
+            "writable. Set LUMID_ACL_DB_PATH to a writable location "
+            "or mount /app/plugin-data as a writable volume."
+        ) from exc
+
+
 def open_store_sync(db_path: str | Path) -> GrantStore:
-    """Synchronous counterpart to ``open_store``; caller owns the connection lifetime."""
-    conn = _connect(db_path)
+    """Synchronous counterpart to ``open_store``; caller owns the connection lifetime.
+
+    Performs the same writability probe as ``open_store`` so callers don't
+    have to repeat it.
+    """
+    try:
+        conn = _connect(db_path)
+    except (PermissionError, OSError) as exc:
+        raise RuntimeError(
+            f"lumid_lumilake_plugin: ACL DB at {str(db_path)!r} is not "
+            "writable. Set LUMID_ACL_DB_PATH to a writable location "
+            "or mount /app/plugin-data as a writable volume."
+        ) from exc
+    _assert_writable(conn, db_path)
     return GrantStore(conn)
 
 
 @asynccontextmanager
 async def open_store(db_path: str | Path) -> AsyncIterator[GrantStore]:
-    conn = await asyncio.to_thread(_connect, db_path)
+    """Open a connection, bootstrap schema, probe writability, yield a ``GrantStore``.
+
+    The writability probe runs at open time so callers can rely on a returned
+    store being writable; an unwritable DB raises ``RuntimeError`` here rather
+    than at first-write time.
+    """
     try:
+        conn = await asyncio.to_thread(_connect, db_path)
+    except (PermissionError, OSError) as exc:
+        raise RuntimeError(
+            f"lumid_lumilake_plugin: ACL DB at {str(db_path)!r} is not "
+            "writable. Set LUMID_ACL_DB_PATH to a writable location "
+            "or mount /app/plugin-data as a writable volume."
+        ) from exc
+    try:
+        await asyncio.to_thread(_assert_writable, conn, db_path)
         yield GrantStore(conn)
     finally:
         await asyncio.to_thread(conn.close)
