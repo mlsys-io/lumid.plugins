@@ -1,9 +1,9 @@
-"""Lumilake plugin: lum.id identity + optional jobs ACL + optional remote optimizer.
+"""Lumilake plugin: lum.id identity + jobs ACL + optional remote optimizer.
 
-A single ``install()`` returns one ``BaseBindings``. Identity, ACL, and
-remote-optimizer surfaces each activate only when their env vars are
-set, so deployments can opt into any subset (e.g. remote-optimizer
-only, no identity).
+A single ``install()`` returns one ``BaseBindings``. The identity
+provider, ACL store, ``PermissionChecker``, and ``ResourceRegistrar``
+are installed on every load. The remote-optimizer surface
+is opt-in: it activates when ``LUMILAKE_REMOTE_OPTIMIZER_URL`` is set.
 """
 
 from collections.abc import AsyncIterator

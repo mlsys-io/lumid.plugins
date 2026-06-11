@@ -16,6 +16,8 @@ from lumilake_hook import BaseBindings
 
 import lumid_lumilake_plugin as plugin
 import lumid_lumilake_plugin.optimizer as plugin_optimizer
+from lumid_lumilake_plugin.config import Settings
+from lumid_lumilake_plugin.optimizer import RemoteOptimizerProvider
 
 
 class _FakeRemoteOptimizer:
@@ -244,8 +246,6 @@ async def test_install_response_shape_validation(
     ],
 )
 def test_provider_rejects_non_https_non_loopback_urls(url: str) -> None:
-    from lumid_lumilake_plugin.optimizer import RemoteOptimizerProvider
-
     with pytest.raises(ValueError, match="must use https://"):
         RemoteOptimizerProvider(base_url=url)
 
@@ -262,8 +262,6 @@ def test_provider_rejects_non_https_non_loopback_urls(url: str) -> None:
 def test_provider_accepts_https_and_loopback_http_urls(url: str) -> None:
     """Constructor must accept https and loopback http without contacting the
     remote (the probe happens in list_optimizers / install)."""
-    from lumid_lumilake_plugin.optimizer import RemoteOptimizerProvider
-
     RemoteOptimizerProvider(base_url=url)
 
 
@@ -276,8 +274,6 @@ def test_settings_loads_both_optional_fields_from_env(
     monkeypatch.setenv("LUMID_ACL_DB_PATH", "/tmp/some/acl.sqlite")
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
 
-    from lumid_lumilake_plugin.config import Settings
-
     s = Settings.from_env()
     assert s.lumid_acl_db_path == "/tmp/some/acl.sqlite"
     assert s.lumilake_remote_optimizer_url == "https://oaas.example.com"
@@ -289,8 +285,19 @@ def test_settings_defaults_when_env_absent(
     monkeypatch.delenv("LUMID_ACL_DB_PATH", raising=False)
     monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_URL", raising=False)
 
-    from lumid_lumilake_plugin.config import Settings
-
     s = Settings.from_env()
     assert s.lumid_acl_db_path == "/app/plugin-data/lumid_acl.sqlite"
     assert s.lumilake_remote_optimizer_url == ""
+
+
+def test_settings_empty_acl_db_path_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit empty env var must not propagate as ``""`` — that would
+    crash ``sqlite3.connect`` with a confusing message. The plugin treats
+    empty/whitespace the same as unset."""
+    monkeypatch.setenv("LUMID_ACL_DB_PATH", "   ")
+    monkeypatch.delenv("LUMILAKE_REMOTE_OPTIMIZER_URL", raising=False)
+
+    s = Settings.from_env()
+    assert s.lumid_acl_db_path == "/app/plugin-data/lumid_acl.sqlite"

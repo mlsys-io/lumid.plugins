@@ -58,6 +58,10 @@ class GrantStore:
         self._conn = conn
         self._lock = asyncio.Lock()
 
+    def close(self) -> None:
+        """Close the underlying sqlite connection. Caller-owned lifecycle."""
+        self._conn.close()
+
     async def grant(
         self,
         kind: str,
@@ -249,25 +253,13 @@ def open_store_sync(db_path: str | Path) -> GrantStore:
 
 @asynccontextmanager
 async def open_store(db_path: str | Path) -> AsyncIterator[GrantStore]:
-    """Open a connection, bootstrap schema, probe writability, yield a ``GrantStore``.
-
-    The writability probe runs at open time so callers can rely on a returned
-    store being writable; an unwritable DB raises ``RuntimeError`` here rather
-    than at first-write time.
-    """
+    """Async wrapper around ``open_store_sync``: opens the connection in a
+    thread, yields the store, and closes the connection on exit."""
+    store = await asyncio.to_thread(open_store_sync, db_path)
     try:
-        conn = await asyncio.to_thread(_connect, db_path)
-    except (PermissionError, OSError) as exc:
-        raise RuntimeError(
-            f"lumid_lumilake_plugin: ACL DB at {str(db_path)!r} is not "
-            "writable. Set LUMID_ACL_DB_PATH to a writable location "
-            "or mount /app/plugin-data as a writable volume."
-        ) from exc
-    try:
-        await asyncio.to_thread(_assert_writable, conn, db_path)
-        yield GrantStore(conn)
+        yield store
     finally:
-        await asyncio.to_thread(conn.close)
+        await asyncio.to_thread(store.close)
 
 
 __all__ = [

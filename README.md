@@ -134,14 +134,13 @@ LUMID_ORG_ID=lumid
 LUMILAKE_REQUIRE_IDENTITY_PROVIDER=1
 LUMID_ACL_DB_PATH=/app/plugin-data/lumid_lumilake_acl.sqlite
 LUMILAKE_REMOTE_OPTIMIZER_URL=https://<optimizer-host>
-LUMILAKE_OPTIMIZER_TYPE=halo-greedy
 # Required if the remote auth-gates GET /api/v1/optimizer (used only for the
 # install-time catalog probe; per-job calls forward the submitter's bearer).
 # LUMILAKE_RUNTIME_TOKEN is Lumilake's existing scheduler-internal credential.
 # LUMILAKE_RUNTIME_TOKEN=<lum.id PAT scoped for service-internal reads>
 ```
 
-`LUMILAKE_REMOTE_OPTIMIZER_URL` is the only env var the plugin requires. At install time the plugin fetches the remote's `/api/v1/optimizer` endpoint once to discover available optimizer types; the result is cached for the process lifetime. `LUMILAKE_OPTIMIZER_TYPE` is a Lumilake-side knob (the host reads it, the plugin does not) that picks which advertised type the host dispatches to — set it to any type the remote returns. If the remote auth-gates the list endpoint, set `LUMILAKE_RUNTIME_TOKEN` (the same scheduler-internal credential Lumilake already configures for FlowMesh control-plane reads); the plugin reuses it for that single install-time request. **Per-job schedule calls do not use this token** — the upstream `RemoteOptimizer` reads `runtime_token_var`, which Lumilake's auth middleware sets to the submitter's lum.id bearer on every request, so each schedule is attributed to the real caller.
+Setting `LUMILAKE_REMOTE_OPTIMIZER_URL` turns on the optional remote-optimizer surface: at install time the plugin fetches the remote's `/api/v1/optimizer` endpoint once and caches the advertised types for the process lifetime. Provider-advertised types are selected per job through the request config's `optimizer_type` field. If the remote auth-gates the list endpoint, set `LUMILAKE_RUNTIME_TOKEN`; per-job schedule calls forward the submitter's lum.id bearer instead, so each request is attributed to the real caller on the remote.
 
 ```bash
 git clone --branch v<version> https://github.com/mlsys-io/lumid.flowmesh-plugin /tmp/lumid-plugins
@@ -150,11 +149,11 @@ cp -rL /tmp/lumid-plugins/src/lumid_lumilake_plugin plugins/
 lumilake deploy restart
 ```
 
-If `LUMID_ACL_DB_PATH` is set, `/app/plugin-data` must be mounted as a writable volume so the plugin can write its ACL database. If the mount is absent or read-only the plugin will raise at install time with a message naming `LUMID_ACL_DB_PATH`.
+The plugin always opens the ACL DB at `LUMID_ACL_DB_PATH` (default `/app/plugin-data/lumid_acl.sqlite`), so the configured path's parent must be a writable mount whenever `lumid_lumilake_plugin` is loaded. If the mount is absent or read-only the plugin raises at install time with a message naming `LUMID_ACL_DB_PATH`.
 
 ### Security notes
 
-**Jobs ACL DB writability.** When `LUMID_ACL_DB_PATH` is set, an unwritable location causes `install()` to raise `RuntimeError` instead of skipping the jobs surface. This is intentional: a misconfigured ACL store must not cause authorization to be silently disabled.
+**Jobs ACL DB writability.** The ACL DB at `LUMID_ACL_DB_PATH` is always opened; an unwritable location causes `install()` to raise `RuntimeError` instead of skipping the jobs surface. This is intentional: a misconfigured ACL store must not cause authorization to be silently disabled.
 
 **Optimizer install-time fetch.** When `LUMILAKE_REMOTE_OPTIMIZER_URL` is set, the plugin calls the remote `/api/v1/optimizer` once at install time, sending `Authorization: Bearer $LUMILAKE_RUNTIME_TOKEN` when that env var is set. **Per-job schedule calls go through the submitter's own bearer** (via `runtime_token_var`) — no static service-account credential is involved in the per-user path, so audit trails on the remote attribute each schedule to the real lum.id user. The URL is trusted implicitly — point `LUMILAKE_REMOTE_OPTIMIZER_URL` only at a service you control. Plain `http://` is rejected unless the host resolves to loopback.
 

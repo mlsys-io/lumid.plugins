@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from lumid_hooks import PrincipalContext, ResourceRef
 from lumilake_hook import BaseBindings, ResourceAction, ResourceKind
 
+import lumid_lumilake_plugin.acl as acl_module
 from lumid_lumilake_plugin import install
 from lumid_lumilake_plugin.acl import GrantLevel, GrantStore, open_store, open_store_sync
 from lumid_lumilake_plugin.permissions import LumidPermissionChecker
@@ -273,8 +274,6 @@ async def test_install_raises_when_db_exists_but_unwritable(
     second call (from install()) gets the failing factory; the first call (from
     open_store_sync() in test setup) must succeed to bootstrap the schema.
     """
-    import lumid_lumilake_plugin.acl as acl_module
-
     class _ReadOnlyConn(sqlite3.Connection):
         """sqlite3.Connection subclass that rejects BEGIN IMMEDIATE.
 
@@ -309,9 +308,7 @@ async def test_install_raises_when_db_exists_but_unwritable(
         # Every call through this patch uses the read-only-simulating subclass.
         # The schema-bootstrap open_store_sync() call in the test setup runs
         # BEFORE the patch is installed, so it goes through the real _connect.
-        from pathlib import Path as _Path
-
-        _Path(path).parent.mkdir(parents=True, exist_ok=True)  # type: ignore[arg-type]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)  # type: ignore[arg-type]
         conn = sqlite3.connect(
             str(path),
             check_same_thread=False,
@@ -386,8 +383,6 @@ async def test_open_store_async_raises_when_db_unwritable(
     """The writability probe lives in ``open_store`` itself so every caller
     (install + future direct callers) benefits without duplicating the BEGIN
     IMMEDIATE dance."""
-    import lumid_lumilake_plugin.acl as acl_module
-
     class _ReadOnlyConn(sqlite3.Connection):
         def execute(
             self,
@@ -404,9 +399,7 @@ async def test_open_store_async_raises_when_db_unwritable(
     open_store_sync(db_path)
 
     def _patched_connect(path: object) -> sqlite3.Connection:
-        from pathlib import Path as _Path
-
-        _Path(path).parent.mkdir(parents=True, exist_ok=True)  # type: ignore[arg-type]
+        Path(path).parent.mkdir(parents=True, exist_ok=True)  # type: ignore[arg-type]
         conn = sqlite3.connect(
             str(path),
             check_same_thread=False,
@@ -421,3 +414,28 @@ async def test_open_store_async_raises_when_db_unwritable(
     with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
         async with open_store(db_path):
             pass
+
+
+async def test_open_store_closes_connection_on_exit(tmp_path: Path) -> None:
+    """The async context manager must close the connection when the ``with``
+    block exits so file handles don't leak across the FastAPI lifespan."""
+    db_path = tmp_path / "lifecycle.sqlite"
+    async with open_store(db_path) as store:
+        # Sanity: store is usable inside the block.
+        assert await store.has_grant(JOB, "j-x", "alice") is False
+        held = store
+    # After exit the underlying connection is closed; any DB op raises
+    # sqlite3.ProgrammingError("Cannot operate on a closed database.").
+    with pytest.raises(sqlite3.ProgrammingError):
+        held._conn.execute("SELECT 1")
+
+
+def test_grant_store_close_is_idempotent_via_double_close(
+    tmp_path: Path,
+) -> None:
+    """``GrantStore.close()`` is exposed for callers that own a sync store
+    (``open_store_sync``). It hands the close down to the sqlite connection;
+    calling it twice should not raise — sqlite tolerates double close."""
+    store = open_store_sync(tmp_path / "close.sqlite")
+    store.close()
+    store.close()
