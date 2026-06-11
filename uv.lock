@@ -276,7 +276,7 @@ requires-dist = [
     { name = "flowmesh-hook", specifier = ">=0.1.2" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "lumid-hooks", specifier = ">=0.2.0" },
-    { name = "lumilake-hook", git = "https://github.com/mlsys-io/lumilake_OSS.git?subdirectory=packages%2Fhook&rev=17763400a33af9be62db7aa96ac15c331aeb2190" },
+    { name = "lumilake-hook", git = "https://github.com/mlsys-io/Lumilake.git?subdirectory=packages%2Fhook&rev=68106f287830f257c5c2ca16fe1b3f9cc481195a" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
@@ -289,7 +289,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "lumilake-hook"
 version = "0.1.2"
-source = { git = "https://github.com/mlsys-io/lumilake_OSS.git?subdirectory=packages%2Fhook&rev=17763400a33af9be62db7aa96ac15c331aeb2190#17763400a33af9be62db7aa96ac15c331aeb2190" }
+source = { git = "https://github.com/mlsys-io/Lumilake.git?subdirectory=packages%2Fhook&rev=68106f287830f257c5c2ca16fe1b3f9cc481195a#68106f287830f257c5c2ca16fe1b3f9cc481195a" }
 dependencies = [
     { name = "lumid-hooks" },
 ]
