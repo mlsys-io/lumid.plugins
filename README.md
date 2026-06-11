@@ -66,7 +66,7 @@ Concrete-id access requires a grant on the resource.
 | 0.2.1 | ≥ 0.1.2 | ≥ 0.1.2 | ≥ 0.1.2 | ≥ 0.1.2 | ≥ 0.2.0 |
 | 0.2.2 | ≥ 0.1.2 | ≥ 0.1.2 | ≥ 0.1.3 | ≥ 0.1.3 | ≥ 0.2.0 |
 
-Host servers are not pip-enforceable (plugins load into a running process), so they must be at least the version shown. FlowMesh 0.1.2 ships the `ResourceRegistrar.reconcile_resources` startup sweep, `/app/plugin-data` writable mount, and `RESULT/WRITE` gate that the FlowMesh adapter depends on. Lumilake 0.1.2 ships the `IdentityProvider` plugin gate. The `lumid_lumilake_plugin` jobs auth surface (PermissionChecker + ResourceRegistrar) and remote-optimizer surface (OptimizerProvider) need a Lumilake release after 0.1.2 — install against a host build that exposes those hooks.
+Host servers are not pip-enforceable (plugins load into a running process), so they must be at least the version shown. FlowMesh 0.1.2 ships the `ResourceRegistrar.reconcile_resources` startup sweep, `/app/plugin-data` writable mount, and `RESULT/WRITE` gate that the FlowMesh adapter depends on. Lumilake 0.1.2 ships the `IdentityProvider` plugin gate. The `lumid_lumilake_plugin` remote-optimizer surface (`OptimizerProvider`) lives in `lumilake-hook` 0.1.3.
 
 ## Environment variables
 
