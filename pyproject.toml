@@ -61,11 +61,3 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "lumilake_hook"
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "lumilake"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "lumilake_server.*"
-ignore_missing_imports = true

@@ -45,9 +45,7 @@ class RemoteOptimizerProvider:
             self._types = self._fetch_remote_types()
         return list(self._types)
 
-    def create_optimizer(
-        self, optimizer_type: str, **kwargs: Any
-    ) -> OptimizerHandle:
+    def create_optimizer(self, optimizer_type: str, **kwargs: Any) -> OptimizerHandle:
         # OptimizerProvider contract: compare case-insensitively, forward
         # the caller's original casing through to the remote.
         lowered = optimizer_type.lower()
@@ -75,18 +73,14 @@ class RemoteOptimizerProvider:
                 f"failed to fetch optimizer list from {url}: {exc}"
             ) from exc
         data = resp.json()
-        if not isinstance(data, dict):
-            raise RuntimeError(
-                f"unexpected response shape from {url}: "
-                f"expected {{'types': [str]}}, got {data!r}"
-            )
-        types = data.get("types")
-        if not isinstance(types, list) or not all(isinstance(t, str) for t in types):
-            raise RuntimeError(
-                f"unexpected response shape from {url}: "
-                f"expected {{'types': [str]}}, got {data!r}"
-            )
-        return types
+        if isinstance(data, dict):
+            types = data.get("types")
+            if isinstance(types, list) and all(isinstance(t, str) for t in types):
+                return types
+        raise RuntimeError(
+            f"unexpected response shape from {url}: "
+            f"expected {{'types': [str]}}, got {data!r}"
+        )
 
 
 __all__ = ["RemoteOptimizerProvider"]
