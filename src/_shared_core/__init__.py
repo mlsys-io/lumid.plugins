@@ -12,6 +12,7 @@ from .identity import (
     build_email_cache,
 )
 from .permissions import PermissionChecker, PermissionPolicy
+from .registrar import ResourceRegistrar
 
 __all__ = [
     "CoreSettings",
@@ -21,6 +22,7 @@ __all__ = [
     "LumidIdentityProvider",
     "PermissionChecker",
     "PermissionPolicy",
+    "ResourceRegistrar",
     "TTLCache",
     "build_email_cache",
     "open_store",
