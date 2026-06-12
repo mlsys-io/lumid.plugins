@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from lumid_hooks import PrincipalContext, ResourceRef
 from lumilake_hook import BaseBindings, ResourceAction, ResourceKind
 
-import lumid_lumilake_plugin.acl as acl_module
+import lumid_lumilake_plugin._core.acl as core_acl
 from lumid_lumilake_plugin import install
 from lumid_lumilake_plugin.acl import GrantLevel, GrantStore, open_store, open_store_sync
 from lumid_lumilake_plugin.permissions import LumidPermissionChecker
@@ -258,30 +258,34 @@ async def test_install_raises_when_db_exists_but_unwritable(
 ) -> None:
     """Regression test: pre-existing but read-only DB must not cause fail-open.
 
-    Before the BEGIN IMMEDIATE fix, a plain BEGIN; ROLLBACK succeeded on a
-    read-only file because SQLite defers write-lock acquisition to the first
-    real write statement.  BEGIN IMMEDIATE acquires a RESERVED lock immediately,
-    so this case is caught at install time rather than at the first grant write.
+    The shared writability probe runs a rolled-back header write
+    (``PRAGMA user_version``) inside an IMMEDIATE transaction. A plain
+    ``BEGIN IMMEDIATE`` is insufficient: it only takes a RESERVED lock, which
+    SQLite grants even on a read-only file, so the actual write is what surfaces
+    the read-only error — at install time rather than at the first grant write.
 
     sqlite3.Connection is a C extension type whose instance attributes are
     read-only slots — instance-level method replacement is not possible.
     We instead use sqlite3.connect()'s ``factory`` parameter to pass in a
-    subclass that overrides execute() to raise OperationalError on
-    "BEGIN IMMEDIATE", giving a fully deterministic simulation of a read-only
+    subclass that overrides execute() to raise OperationalError on the probe's
+    header write, giving a fully deterministic simulation of a read-only
     database regardless of filesystem or user permissions.
 
-    The patch targets lumid_lumilake_plugin.acl._connect so only the
-    second call (from install()) gets the failing factory; the first call (from
+    The patch targets lumid_lumilake_plugin._core.acl._connect (the shared
+    factory the plugin's open_store actually calls) so only the second call
+    (from install()) gets the failing factory; the first call (from
     open_store_sync() in test setup) must succeed to bootstrap the schema.
     """
     class _ReadOnlyConn(sqlite3.Connection):
-        """sqlite3.Connection subclass that rejects BEGIN IMMEDIATE.
+        """sqlite3.Connection subclass that rejects the probe's header write.
 
-        The positional-only `parameters: object` signature matches the arity
-        of the real sqlite3.Connection.execute stub while accepting any value.
-        The # type: ignore[arg-type] on the super() call is needed because
-        `object` is wider than SupportsLenAndGetItem | Mapping; at runtime
-        sqlite3 accepts () as the default without complaint.
+        Mirrors a real read-only DB: ``BEGIN IMMEDIATE`` succeeds (RESERVED lock
+        only), but the ``PRAGMA user_version`` write fails. The positional-only
+        ``parameters: object`` signature matches the arity of the real
+        sqlite3.Connection.execute stub while accepting any value; the
+        # type: ignore[arg-type] on the super() call is needed because ``object``
+        is wider than SupportsLenAndGetItem | Mapping; at runtime sqlite3 accepts
+        () as the default without complaint.
         """
 
         def execute(
@@ -290,11 +294,8 @@ async def test_install_raises_when_db_exists_but_unwritable(
             parameters: object = (),
             /,
         ) -> sqlite3.Cursor:
-            if sql.strip().upper() == "BEGIN IMMEDIATE":
+            if sql.strip().upper().startswith("PRAGMA USER_VERSION ="):
                 raise sqlite3.OperationalError("attempt to write a readonly database")
-            # parameters is typed as `object` (wider than the stub's
-            # SupportsLenAndGetItem | Mapping) so we need to suppress here;
-            # at runtime sqlite3 accepts () as the default fine.
             return super().execute(sql, parameters)  # type: ignore[arg-type]
 
     db_path = tmp_path / "existing_acl.sqlite"
@@ -315,10 +316,10 @@ async def test_install_raises_when_db_exists_but_unwritable(
             isolation_level=None,
             factory=_ReadOnlyConn,
         )
-        conn.executescript(acl_module._SCHEMA)
+        conn.executescript(core_acl._SCHEMA)
         return conn
 
-    monkeypatch.setattr(acl_module, "_connect", _patched_connect)
+    monkeypatch.setattr(core_acl, "_connect", _patched_connect)
 
     with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
         async with install():
@@ -381,8 +382,7 @@ async def test_open_store_async_raises_when_db_unwritable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The writability probe lives in ``open_store`` itself so every caller
-    (install + future direct callers) benefits without duplicating the BEGIN
-    IMMEDIATE dance."""
+    (install + future direct callers) benefits without duplicating the probe."""
     class _ReadOnlyConn(sqlite3.Connection):
         def execute(
             self,
@@ -390,7 +390,7 @@ async def test_open_store_async_raises_when_db_unwritable(
             parameters: object = (),
             /,
         ) -> sqlite3.Cursor:
-            if sql.strip().upper() == "BEGIN IMMEDIATE":
+            if sql.strip().upper().startswith("PRAGMA USER_VERSION ="):
                 raise sqlite3.OperationalError("attempt to write a readonly database")
             return super().execute(sql, parameters)  # type: ignore[arg-type]
 
@@ -406,10 +406,10 @@ async def test_open_store_async_raises_when_db_unwritable(
             isolation_level=None,
             factory=_ReadOnlyConn,
         )
-        conn.executescript(acl_module._SCHEMA)
+        conn.executescript(core_acl._SCHEMA)
         return conn
 
-    monkeypatch.setattr(acl_module, "_connect", _patched_connect)
+    monkeypatch.setattr(core_acl, "_connect", _patched_connect)
 
     with pytest.raises(RuntimeError, match="LUMID_ACL_DB_PATH"):
         async with open_store(db_path):
