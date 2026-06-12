@@ -2,7 +2,7 @@
 
 FlowMesh runs its startup reconcile once with every live resource across all
 kinds, so the sweep refreshes ``last_seen_at`` on every listed pair and then
-drops any grant left untouched — unconditionally, regardless of kind.
+drops any grant left untouched.
 """
 
 import asyncio
@@ -55,8 +55,9 @@ class GrantStore(_CoreGrantStore):
         conn.execute("BEGIN")
         try:
             touched = 0
-            for start in range(0, len(pairs), self.RECONCILE_CHUNK):
-                chunk = pairs[start : start + self.RECONCILE_CHUNK]
+            reconcile_chunk = self.RECONCILE_CHUNK
+            for start in range(0, len(pairs), reconcile_chunk):
+                chunk = pairs[start : start + reconcile_chunk]
                 values_clause = ",".join("(?, ?)" for _ in chunk)
                 flat: list[str] = [now]
                 for kind, rid in chunk:

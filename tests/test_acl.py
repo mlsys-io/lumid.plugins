@@ -295,13 +295,13 @@ async def test_open_store_rejects_readonly_path(tmp_path: Path) -> None:
     ro_dir = tmp_path / "ro"
     ro_dir.mkdir()
     db = ro_dir / "acl.sqlite"
-    async with open_store(db) as _store:  # create the file first
+    async with open_store(db):  # create the file first
         pass
     db.chmod(0o400)
     ro_dir.chmod(0o500)
     try:
         with pytest.raises(RuntimeError, match=r"lumid_flowmesh_plugin: ACL DB.*not writable"):
-            async with open_store(db) as _store:
+            async with open_store(db):
                 pass
     finally:
         ro_dir.chmod(0o700)

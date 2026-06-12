@@ -71,8 +71,10 @@ class PermissionChecker:
         if self._is_admin(principal):
             return
 
+        policy = self._policy
+
         if resource.id is None:
-            required_scope = self._policy.kind_level_scopes.get((resource.kind, action))
+            required_scope = policy.kind_level_scopes.get((resource.kind, action))
             if required_scope is not None:
                 if required_scope in principal.scopes:
                     return
@@ -88,13 +90,13 @@ class PermissionChecker:
                 logger, f"unsupported {action} on {resource.kind}/{resource.id}"
             )
 
-        required_level = self._policy.required_level.get(action)
+        required_level = policy.required_level.get(action)
         if required_level is None:
             raise self._deny(
                 logger, f"{action} on {resource.kind}/{resource.id} is admin-only"
             )
 
-        owner_kind = self._policy.ownership_kind.get(resource.kind, resource.kind)
+        owner_kind = policy.ownership_kind.get(resource.kind, resource.kind)
         level = await self._store.get_level(
             owner_kind, resource.id, principal.principal_id
         )
@@ -115,11 +117,12 @@ class PermissionChecker:
     ) -> frozenset[str] | None:
         if self._is_admin(principal):
             return None
-        required_level = self._policy.required_level.get(action)
+        policy = self._policy
+        required_level = policy.required_level.get(action)
         if required_level is None:
             # No grants can satisfy this action, so non-admins have no access.
             return frozenset()
-        owner_kind = self._policy.ownership_kind.get(kind, kind)
+        owner_kind = policy.ownership_kind.get(kind, kind)
         return await self._store.list_ids_for_principal(
             principal.principal_id, owner_kind, required_level
         )
