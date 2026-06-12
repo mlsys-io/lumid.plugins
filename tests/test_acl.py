@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from lumid_flowmesh_plugin.acl import GrantLevel, GrantStore, open_store
+from lumid_flowmesh_plugin.acl import (
+    GrantLevel,
+    GrantStore,
+    open_store,
+    open_store_sync,
+)
 
 
 @pytest.fixture
@@ -275,6 +280,47 @@ async def test_open_store_is_idempotent(tmp_path: Path) -> None:
         pass
     async with open_store(db) as _store:  # second open must not raise
         pass
+
+
+async def test_open_store_creates_missing_parent_dirs(tmp_path: Path) -> None:
+    db = tmp_path / "nested" / "dirs" / "acl.sqlite"
+    assert not db.parent.exists()
+    async with open_store(db) as store:
+        await store.grant("workflow", "wf-1", "alice", GrantLevel.WRITE)
+        assert await store.has_grant("workflow", "wf-1", "alice") is True
+    assert db.exists()
+
+
+async def test_open_store_rejects_readonly_path(tmp_path: Path) -> None:
+    ro_dir = tmp_path / "ro"
+    ro_dir.mkdir()
+    db = ro_dir / "acl.sqlite"
+    async with open_store(db) as _store:  # create the file first
+        pass
+    db.chmod(0o400)
+    ro_dir.chmod(0o500)
+    try:
+        with pytest.raises(RuntimeError, match=r"lumid_flowmesh_plugin: ACL DB.*not writable"):
+            async with open_store(db) as _store:
+                pass
+    finally:
+        ro_dir.chmod(0o700)
+        db.chmod(0o600)
+
+
+def test_open_store_sync_rejects_readonly_path(tmp_path: Path) -> None:
+    ro_dir = tmp_path / "ro_sync"
+    ro_dir.mkdir()
+    db = ro_dir / "acl.sqlite"
+    open_store_sync(db).close()  # create the file first
+    db.chmod(0o400)
+    ro_dir.chmod(0o500)
+    try:
+        with pytest.raises(RuntimeError, match=r"lumid_flowmesh_plugin: ACL DB.*not writable"):
+            open_store_sync(db)
+    finally:
+        ro_dir.chmod(0o700)
+        db.chmod(0o600)
 
 
 def _backdate_all(db_path: Path, kind: str, resource_id: str, *, days: int) -> None:
