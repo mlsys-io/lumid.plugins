@@ -2,9 +2,7 @@
 
 FlowMesh runs its startup reconcile once with every live resource across all
 kinds, so the sweep refreshes ``last_seen_at`` on every listed pair and then
-drops any grant left untouched — unconditionally, regardless of kind. (Lumilake
-reconciles per-kind and therefore scopes its deletions; that divergence is why
-``reconcile`` lives in the subclass rather than the shared base.)
+drops any grant left untouched — unconditionally, regardless of kind.
 """
 
 import asyncio

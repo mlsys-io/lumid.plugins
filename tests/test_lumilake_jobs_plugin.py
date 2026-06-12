@@ -256,20 +256,19 @@ async def test_install_raises_when_parent_unwritable(
 async def test_install_raises_when_db_exists_but_unwritable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Regression test: pre-existing but read-only DB must not cause fail-open.
+    """A pre-existing read-only DB must fail at install time, not fail open.
 
-    The shared writability probe runs a rolled-back header write
+    The writability probe runs a rolled-back header write
     (``PRAGMA user_version``) inside an IMMEDIATE transaction. A plain
-    ``BEGIN IMMEDIATE`` is insufficient: it only takes a RESERVED lock, which
-    SQLite grants even on a read-only file, so the actual write is what surfaces
-    the read-only error — at install time rather than at the first grant write.
+    ``BEGIN IMMEDIATE`` would not catch a read-only DB: it only takes a RESERVED
+    lock, which SQLite grants even on a read-only file, so the actual write is
+    what surfaces the error.
 
     sqlite3.Connection is a C extension type whose instance attributes are
     read-only slots — instance-level method replacement is not possible.
-    We instead use sqlite3.connect()'s ``factory`` parameter to pass in a
-    subclass that overrides execute() to raise OperationalError on the probe's
-    header write, giving a fully deterministic simulation of a read-only
-    database regardless of filesystem or user permissions.
+    The test hands sqlite3.connect()'s ``factory`` a subclass that overrides
+    execute() to raise OperationalError on the probe's header write, a
+    deterministic read-only simulation independent of filesystem permissions.
 
     The patch targets lumid_lumilake_plugin._core.acl._connect (the shared
     factory the plugin's open_store actually calls) so only the second call

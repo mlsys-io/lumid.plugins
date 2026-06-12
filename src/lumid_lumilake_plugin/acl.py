@@ -2,10 +2,7 @@
 
 Lumilake invokes ``reconcile_resources`` once per kind, so each sweep must scope
 its deletions to the kinds present in the input — kinds absent from a call (e.g.
-``TRACE``/``ARTIFACT`` during a JOB-only sweep) must be preserved. (FlowMesh
-reconciles every kind in one call and drops untouched grants unconditionally;
-that divergence is why ``reconcile`` lives in the subclass rather than the
-shared base.)
+``TRACE``/``ARTIFACT`` during a JOB-only sweep) must be preserved.
 """
 
 import asyncio
