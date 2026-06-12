@@ -11,6 +11,7 @@ from .identity import (
     LumidIdentityProvider,
     build_email_cache,
 )
+from .permissions import PermissionChecker, PermissionPolicy
 
 __all__ = [
     "CoreSettings",
@@ -18,6 +19,8 @@ __all__ = [
     "GrantStore",
     "IntrospectedToken",
     "LumidIdentityProvider",
+    "PermissionChecker",
+    "PermissionPolicy",
     "TTLCache",
     "build_email_cache",
     "open_store",
