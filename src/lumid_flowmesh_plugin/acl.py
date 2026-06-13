@@ -1,156 +1,25 @@
-"""SQLite-backed grant store for PermissionChecker / ResourceRegistrar.
+"""FlowMesh ``GrantStore``: the shared CRUD base plus an all-kinds reconcile sweep.
 
-One table, ``acl_grants``, keyed by ``(kind, id, principal_id)``. Each row is
-one grant: principal P holds ``level`` access on (kind, id). ``level`` is an
-ordinal — ``READ`` (1) permits read, ``WRITE`` (2) permits read and mutation.
-Rows are written by ``LumidResourceRegistrar.register`` at resource creation
-time (owner gets ``WRITE``) and read by ``LumidPermissionChecker`` on every
-authz decision. Stale rows are cleared by the host's startup reconcile sweep,
-which touches every live resource and then drops anything left untouched.
-``granted_at`` records when the grant was first written; ``last_seen_at`` is
-the liveness marker the sweep refreshes and compares against.
-
-Built on the stdlib ``sqlite3`` module. A single ``Connection`` opened in
-autocommit is shared across all ops; an ``asyncio.Lock`` serialises access
-and each query runs in ``asyncio.to_thread`` so the event loop never blocks.
+FlowMesh runs its startup reconcile once with every live resource across all
+kinds, so the sweep refreshes ``last_seen_at`` on every listed pair and then
+drops any grant left untouched.
 """
 
 import asyncio
-import sqlite3
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import Iterable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
-from enum import IntEnum
 from pathlib import Path
-from typing import Any
+
+from ._core import GrantLevel
+from ._core import GrantStore as _CoreGrantStore
+from ._core import open_store as _core_open_store
+from ._core import open_store_sync as _core_open_store_sync
+
+_PLUGIN_NAME = "lumid_flowmesh_plugin"
 
 
-class GrantLevel(IntEnum):
-    READ = 1
-    WRITE = 2
-
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS acl_grants (
-    kind TEXT NOT NULL,
-    id TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    level INTEGER NOT NULL,
-    granted_at TEXT NOT NULL,
-    last_seen_at TEXT NOT NULL,
-    PRIMARY KEY (kind, id, principal_id)
-);
-CREATE INDEX IF NOT EXISTS ix_acl_grants_principal_kind
-    ON acl_grants (principal_id, kind);
-"""
-
-
-def _connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(
-        str(db_path),
-        check_same_thread=False,
-        isolation_level=None,
-    )
-    conn.executescript(_SCHEMA)
-    return conn
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
-
-
-# Max ``(kind, id)`` pairs per reconcile UPDATE. Each pair binds 2 variables and
-# adds one VALUES row, so 400 stays under SQLite's default variable (999) and
-# compound-select (500) limits even on the oldest supported builds.
-_RECONCILE_CHUNK = 400
-
-
-class GrantStore:
-    """Async CRUD wrapper around the ``acl_grants`` table.
-
-    All access goes through ``asyncio.to_thread`` and is serialised by an
-    ``asyncio.Lock`` since a single ``sqlite3.Connection`` is not thread-safe.
-    """
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
-        self._lock = asyncio.Lock()
-
-    async def grant(
-        self,
-        kind: str,
-        resource_id: str,
-        principal_id: str,
-        level: GrantLevel,
-    ) -> None:
-        """Upsert a grant for ``(kind, resource_id, principal_id)`` with ``now``.
-
-        Re-granting refreshes ``last_seen_at`` and overwrites ``level``.
-        """
-        now = _now_iso()
-        params = (kind, resource_id, principal_id, int(level), now, now)
-        async with self._lock:
-            await asyncio.to_thread(
-                self._conn.execute,
-                "INSERT INTO acl_grants(kind, id, principal_id, level, granted_at, last_seen_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(kind, id, principal_id) "
-                "DO UPDATE SET last_seen_at = excluded.last_seen_at, level = excluded.level",
-                params,
-            )
-
-    async def revoke(self, kind: str, resource_id: str, principal_id: str) -> bool:
-        """Remove a single grant. Returns True if a row was removed."""
-        async with self._lock:
-            cur = await asyncio.to_thread(
-                self._conn.execute,
-                "DELETE FROM acl_grants WHERE kind=? AND id=? AND principal_id=?",
-                (kind, resource_id, principal_id),
-            )
-            return cur.rowcount > 0
-
-    async def delete_resource(self, kind: str, resource_id: str) -> int:
-        """Remove every grant for ``(kind, resource_id)``. Returns rows removed."""
-        async with self._lock:
-            cur = await asyncio.to_thread(
-                self._conn.execute,
-                "DELETE FROM acl_grants WHERE kind=? AND id=?",
-                (kind, resource_id),
-            )
-            return cur.rowcount
-
-    async def get_level(
-        self, kind: str, resource_id: str, principal_id: str
-    ) -> GrantLevel | None:
-        """Return ``principal_id``'s grant level on ``(kind, resource_id)``, or None."""
-        async with self._lock:
-            row = await asyncio.to_thread(
-                self._fetchone,
-                "SELECT level FROM acl_grants "
-                "WHERE kind=? AND id=? AND principal_id=? LIMIT 1",
-                (kind, resource_id, principal_id),
-            )
-        return GrantLevel(row[0]) if row is not None else None
-
-    async def has_grant(
-        self, kind: str, resource_id: str, principal_id: str
-    ) -> bool:
-        """Return True if ``principal_id`` has any grant on ``(kind, resource_id)``."""
-        return await self.get_level(kind, resource_id, principal_id) is not None
-
-    async def list_ids_for_principal(
-        self, principal_id: str, kind: str, min_level: GrantLevel
-    ) -> frozenset[str]:
-        """Return ids of ``kind`` that ``principal_id`` holds ``>= min_level`` on."""
-        async with self._lock:
-            rows = await asyncio.to_thread(
-                self._fetchall,
-                "SELECT id FROM acl_grants "
-                "WHERE principal_id=? AND kind=? AND level>=?",
-                (principal_id, kind, int(min_level)),
-            )
-        return frozenset(r[0] for r in rows)
-
+class GrantStore(_CoreGrantStore):
     async def reconcile(
         self,
         pairs: Iterable[tuple[str, str]],
@@ -182,12 +51,13 @@ class GrantStore:
     ) -> tuple[int, int]:
         conn = self._conn
         cutoff = session_start.astimezone(UTC).isoformat()
-        now = _now_iso()
+        now = self._now_iso()
         conn.execute("BEGIN")
         try:
             touched = 0
-            for start in range(0, len(pairs), _RECONCILE_CHUNK):
-                chunk = pairs[start : start + _RECONCILE_CHUNK]
+            reconcile_chunk = self.RECONCILE_CHUNK
+            for start in range(0, len(pairs), reconcile_chunk):
+                chunk = pairs[start : start + reconcile_chunk]
                 values_clause = ",".join("(?, ?)" for _ in chunk)
                 flat: list[str] = [now]
                 for kind, rid in chunk:
@@ -208,31 +78,20 @@ class GrantStore:
             raise
         return touched, deleted
 
-    def _fetchone(
-        self, sql: str, params: tuple[object, ...]
-    ) -> tuple[Any, ...] | None:
-        row: tuple[Any, ...] | None = self._conn.execute(sql, params).fetchone()
-        return row
 
-    def _fetchall(
-        self, sql: str, params: tuple[object, ...]
-    ) -> list[tuple[Any, ...]]:
-        rows: list[tuple[Any, ...]] = self._conn.execute(sql, params).fetchall()
-        return rows
+def open_store_sync(db_path: str | Path) -> GrantStore:
+    """Open a FlowMesh ``GrantStore`` synchronously; caller owns its lifetime."""
+    return _core_open_store_sync(db_path, GrantStore, _PLUGIN_NAME)
 
 
-@asynccontextmanager
-async def open_store(db_path: str | Path) -> AsyncIterator[GrantStore]:
+def open_store(db_path: str | Path) -> AbstractAsyncContextManager[GrantStore]:
     """Open a connection, bootstrap the schema, yield a ``GrantStore``; close on exit."""
-    conn = await asyncio.to_thread(_connect, db_path)
-    try:
-        yield GrantStore(conn)
-    finally:
-        await asyncio.to_thread(conn.close)
+    return _core_open_store(db_path, GrantStore, _PLUGIN_NAME)
 
 
 __all__ = [
     "GrantLevel",
     "GrantStore",
     "open_store",
+    "open_store_sync",
 ]
