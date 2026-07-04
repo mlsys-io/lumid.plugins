@@ -15,7 +15,12 @@ from lumilake_hook import ResourceAction, ResourceKind
 from ._core import GrantLevel, GrantStore, PermissionChecker, PermissionPolicy
 
 _POLICY = PermissionPolicy(
-    admin_scopes=frozenset({"*", "lumilake:*", "lumilake:admin", "flowmesh:admin"}),
+    # `lumid:admin` is lum.id's platform-admin scope (what super_admin/admin PATs actually carry
+    # from /oauth/introspect). Included so lum.id platform admins get Lumilake admin without needing
+    # a Lumilake-specific scope — mirrors the `flowmesh:admin` rationale. Without it NO lum.id token
+    # (not even super_admin, which carries lumid:read/write/admin) could pass the kind-level
+    # `lumilake:jobs:write` gate, so job submission was impossible for every real caller.
+    admin_scopes=frozenset({"*", "lumilake:*", "lumilake:admin", "flowmesh:admin", "lumid:admin"}),
     # Anything not in this map is admin-only at kind level.
     kind_level_scopes={
         (ResourceKind.JOB.value, ResourceAction.READ.value): "lumilake:jobs:read",
