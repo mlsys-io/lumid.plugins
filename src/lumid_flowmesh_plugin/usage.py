@@ -98,3 +98,31 @@ class RunmeshUsageSink:
                 row["task_id"],
                 resp.text[:200],
             )
+            return
+
+        # Runmesh answers HTTP 200 and puts the real outcome in the body's
+        # `code` (it is a RuoYi-style `R<T>` envelope). Checking only the status
+        # therefore treats every application-level rejection as a success: the
+        # entry is dropped, nothing is logged, and the ledger silently stops
+        # growing.
+        #
+        # That is not hypothetical. Measured 2026-09-11 against the live bridge:
+        #   HTTP 200 {"code":500,"msg":"unknown user"}
+        # for any task whose owner has no matching `sys_user` row -- which is
+        # every service-account-owned task -- while a provisioned user returned
+        # {"code":200,...,"data":{"idempotent":false,...}}. Both looked
+        # identical to this sink. Billing appeared to be running and was
+        # discarding entries.
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if code is not None and int(code) != 200:
+            logger.warning(
+                "%s: Runmesh rejected task %s: code=%s msg=%s",
+                self.name,
+                row["task_id"],
+                code,
+                (payload or {}).get("msg"),
+            )
