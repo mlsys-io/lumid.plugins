@@ -438,3 +438,67 @@ def test_grant_store_close_is_idempotent_via_double_close(
     store = open_store_sync(tmp_path / "close.sqlite")
     store.close()
     store.close()
+
+
+# --- Lumilake fleet kinds ------------------------------------------------------
+# routes/workers.py enumerates the FlowMesh fleet through Lumilake with the same
+# two-stage shape FlowMesh uses: require_permission(WORKER, None, READ) then
+# resolve_accessible_ids(WORKER, READ). Without a kind-level scope the first stage
+# 403s every non-admin; with the scope but no fleet_kinds the second silently
+# empties the list, which is the worse failure because nothing logs it.
+
+import logging as _logging
+
+import pytest as _pytest
+from lumid_hooks import PrincipalContext as _PrincipalContext
+from lumilake_hook import ResourceAction as _RA
+from lumilake_hook import ResourceKind as _RK
+from lumid_hooks import ResourceRef as _ResourceRef
+
+from lumid_lumilake_plugin.acl import GrantLevel as _GL
+from lumid_lumilake_plugin.acl import open_store as _open_store
+from lumid_lumilake_plugin.permissions import LumidPermissionChecker as _Checker
+
+
+def _p(pid: str, *scopes: str) -> _PrincipalContext:
+    return _PrincipalContext(
+        principal_id=pid, org_id="lumid", external_id=pid,
+        principal_type="user", scopes=list(scopes),
+    )
+
+
+@_pytest.fixture
+async def _ll_store(tmp_path):
+    async with _open_store(tmp_path / "ll-acl.sqlite") as s:
+        yield s
+
+
+async def test_lumilake_worker_scope_passes_kind_level_gate(_ll_store) -> None:
+    """`lumilake:workers:read` must clear require(); without it, admin-only."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    ref = _ResourceRef(kind=_RK.WORKER.value, id=None)
+    await c.require(_p("alice", "lumilake:workers:read"), ref, _RA.READ.value, log)
+    with _pytest.raises(Exception):
+        await c.require(_p("bob"), ref, _RA.READ.value, log)
+
+
+async def test_lumilake_workers_not_ownership_filtered(_ll_store) -> None:
+    """Holding the scope yields the whole fleet, not an empty list."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
+    got = await c.accessible_ids(_p("alice", "lumilake:workers:read"), _RK.WORKER.value, _RA.READ.value, log)
+    assert got is None, "worker list must not be ownership-filtered"
+    # and no scope still means no rows -- not a public read
+    assert await c.accessible_ids(_p("alice"), _RK.WORKER.value, _RA.READ.value, log) == frozenset()
+
+
+async def test_lumilake_jobs_still_ownership_filtered(_ll_store) -> None:
+    """Tenancy boundary: the jobs scope must NOT reveal another principal's jobs."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.JOB.value, "job-alice", "alice", _GL.READ)
+    await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)
+    got = await c.accessible_ids(_p("alice", "lumilake:jobs:read"), _RK.JOB.value, _RA.READ.value, log)
+    assert got == frozenset({"job-alice"}), "jobs must stay per-principal"
