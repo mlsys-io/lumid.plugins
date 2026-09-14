@@ -19,6 +19,19 @@ Policy resolution, in order:
   against the owning kind of the same id.
 * **accessible_ids** returns the ids the principal can act on at the requested
   action's level, or ``None`` for admins.
+* **Fleet kinds** (``policy.fleet_kinds``) describe shared infrastructure that
+  no principal owns -- a worker or a node is registered by the fleet's own
+  credential, never granted to a human. Filtering those by ownership returns
+  the empty set for every real user, so a healthy fleet renders as an empty
+  one while every layer below reports correct. For these kinds the kind-level
+  scope IS the authorization: ``accessible_ids`` returns ``None`` when the
+  principal holds it and ``frozenset()`` when it does not.
+
+  Per-principal kinds (tasks, workflows, jobs) MUST NOT be listed there. Their
+  ownership filter is the tenancy boundary: ``require`` only decides whether
+  you may call the list endpoint, and ``accessible_ids`` decides which rows you
+  see. Opting one of those in would show every principal every other
+  principal's rows.
 """
 
 import logging
@@ -40,6 +53,11 @@ class PermissionPolicy:
     ownership_kind: dict[str, str]
     valid_kinds: frozenset[str]
     valid_actions: frozenset[str]
+    # Kinds describing shared infrastructure rather than per-principal
+    # resources. For these, holding the kind-level scope IS the authorization
+    # and ``accessible_ids`` imposes no ownership filter. Empty by default, so
+    # a host must opt a kind in deliberately.
+    fleet_kinds: frozenset[str] = frozenset()
 
 
 class PermissionChecker:
@@ -118,6 +136,13 @@ class PermissionChecker:
         if self._is_admin(principal):
             return None
         policy = self._policy
+        # Fleet kinds are owned by nobody, so an ownership filter can only ever
+        # return the empty set for them -- see the module docstring.
+        if kind in policy.fleet_kinds:
+            required_scope = policy.kind_level_scopes.get((kind, action))
+            if required_scope is not None and required_scope in principal.scopes:
+                return None
+            return frozenset()
         required_level = policy.required_level.get(action)
         if required_level is None:
             # No grants can satisfy this action, so non-admins have no access.

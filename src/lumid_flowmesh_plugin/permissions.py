@@ -22,6 +22,10 @@ lives in ``_core.permissions``.
 
   A valid `(kind, action)` absent from the table is admin-only; an unrecognised
   kind or action is unsupported. Both deny.
+* **Fleet kinds** — WORKER and NODE are shared infrastructure that no principal
+  owns, so listing them is authorized by the kind-level scope alone rather than
+  by per-id grants. WORKFLOW/TASK/RESULT are deliberately excluded: they are
+  per-principal and their ownership filter is the tenancy boundary.
 * **Concrete-id checks** require a grant whose level covers the action: READ
   needs `GrantLevel.READ`, mutating actions (WRITE, CANCEL) need
   `GrantLevel.WRITE`. The `admin` action is never grant-satisfiable. RESULT has
@@ -57,6 +61,13 @@ _POLICY = PermissionPolicy(
     },
     # Kinds whose ownership lives under a different kind's grants.
     ownership_kind={ResourceKind.RESULT.value: ResourceKind.TASK.value},
+    # Shared fleet infrastructure: nobody owns a worker or a node. They are
+    # registered under the fleet's own credential, so their grants name that
+    # principal and never a human one -- an ownership filter would return zero
+    # rows for every real user. `flowmesh:workers:read` / `flowmesh:nodes:read`
+    # are the authorization here. WORKFLOW/TASK/RESULT stay out: they are
+    # per-principal and their filter is the tenancy boundary.
+    fleet_kinds=frozenset({ResourceKind.WORKER.value, ResourceKind.NODE.value}),
     valid_kinds=frozenset(k.value for k in ResourceKind),
     valid_actions=frozenset(a.value for a in ResourceAction),
 )

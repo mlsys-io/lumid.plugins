@@ -314,3 +314,51 @@ async def test_accessible_ids_admin_action_returns_empty(
     checker = LumidPermissionChecker(store)
     await store.grant(WF, "wf-1", "alice", GrantLevel.WRITE)
     assert await checker.accessible_ids(_principal("alice"), WF, ADMIN, logger) == frozenset()
+
+
+# --- Fleet kinds -------------------------------------------------------------
+# Regression: office reported a healthy 12-worker fleet as an empty one for a
+# full day. Workers register under the fleet's own credential, so their grants
+# name that principal; filtering a human's list by ownership matched nothing
+# and the API answered `200 []` with every layer below correct.
+
+
+@pytest.mark.parametrize(
+    ("kind", "scope"),
+    [(WORKER, "flowmesh:workers:read"), (NODE, "flowmesh:nodes:read")],
+)
+async def test_fleet_kinds_unfiltered_with_kind_level_scope(
+    store: GrantStore, kind: str, scope: str
+) -> None:
+    """The kind-level scope authorizes the whole fleet -- no ownership filter."""
+    checker = LumidPermissionChecker(store)
+    logger = logging.getLogger("t")
+    # Grants exist, but under the fleet credential, not this caller.
+    await store.grant(kind, "wkr-28", "admin", GrantLevel.WRITE)
+    assert await checker.accessible_ids(_principal("alice", scope), kind, READ, logger) is None
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+async def test_fleet_kinds_denied_without_scope(store: GrantStore, kind: str) -> None:
+    """No kind-level scope still means no rows -- this is not a public read."""
+    checker = LumidPermissionChecker(store)
+    logger = logging.getLogger("t")
+    await store.grant(kind, "wkr-28", "admin", GrantLevel.WRITE)
+    assert await checker.accessible_ids(_principal("alice"), kind, READ, logger) == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("kind", "scope"),
+    [(WF, "flowmesh:workflows:read"), (TASK, "flowmesh:tasks:read")],
+)
+async def test_per_principal_kinds_still_ownership_filtered(
+    store: GrantStore, kind: str, scope: str
+) -> None:
+    """The tenancy boundary: holding the kind-level scope must NOT reveal
+    another principal's rows. Guards against opting these into fleet_kinds."""
+    checker = LumidPermissionChecker(store)
+    logger = logging.getLogger("t")
+    await store.grant(kind, "owned-by-alice", "alice", GrantLevel.READ)
+    await store.grant(kind, "owned-by-bob", "bob", GrantLevel.READ)
+    got = await checker.accessible_ids(_principal("alice", scope), kind, READ, logger)
+    assert got == frozenset({"owned-by-alice"}), "scope must not widen to bob's rows"
