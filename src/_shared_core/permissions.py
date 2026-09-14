@@ -58,6 +58,12 @@ class PermissionPolicy:
     # and ``accessible_ids`` imposes no ownership filter. Empty by default, so
     # a host must opt a kind in deliberately.
     fleet_kinds: frozenset[str] = frozenset()
+    # Kinds the HOST never registers, where a concrete-id check would otherwise be
+    # unsatisfiable for every non-admin. The first principal to touch an UNOWNED
+    # resource of such a kind claims it (trust-on-first-use); everyone else is then
+    # denied by the ordinary grant check. Empty by default -- opting a kind in means
+    # accepting that the first caller wins the name.
+    claimable_kinds: frozenset[str] = frozenset()
 
 
 class PermissionChecker:
@@ -120,6 +126,25 @@ class PermissionChecker:
         )
         if level is not None and level >= required_level:
             return
+        # Claim-on-first-use, for kinds the host never registers. Deliberately AFTER
+        # the grant check above, so an existing owner always wins and this can only
+        # ever fire on a resource nobody holds. The store does it atomically: a
+        # concurrent second claimer inserts nothing, gets False, and falls through to
+        # the denial below rather than quietly co-owning the resource.
+        if resource.kind in policy.claimable_kinds:
+            claimed = await self._store.claim_if_unowned(
+                owner_kind, resource.id, principal.principal_id, required_level
+            )
+            if claimed:
+                logger.info(
+                    "%s: %s claimed unowned %s/%s at %s",
+                    self.name,
+                    principal.principal_id,
+                    resource.kind,
+                    resource.id,
+                    required_level.name,
+                )
+                return
         raise self._deny(
             logger,
             f"{action} on {resource.kind}/{resource.id} denied for "

@@ -142,6 +142,37 @@ class GrantStore:
                 params,
             )
 
+    async def claim_if_unowned(
+        self,
+        kind: str,
+        resource_id: str,
+        principal_id: str,
+        level: GrantLevel,
+    ) -> bool:
+        """Grant ``principal_id`` on an UNOWNED resource. True iff this call claimed it.
+
+        Trust-on-first-use: the first principal to touch a resource nobody holds
+        becomes its owner; everyone else is denied by the normal grant check. Used
+        for kinds the host never registers, where the alternative is a permission
+        gate no non-admin can ever satisfy.
+
+        ATOMIC ON PURPOSE. A read-then-write would let two concurrent first-writers
+        both observe "unowned" and both be granted, which silently turns a
+        single-owner resource into a shared one. The INSERT ... SELECT ... WHERE NOT
+        EXISTS runs as ONE statement under the store lock, so exactly one caller
+        inserts and the loser sees rowcount 0 and is denied.
+        """
+        now = self._now_iso()
+        async with self._lock:
+            cur = await asyncio.to_thread(
+                self._conn.execute,
+                "INSERT INTO acl_grants(kind, id, principal_id, level, granted_at, last_seen_at) "
+                "SELECT ?, ?, ?, ?, ?, ? "
+                "WHERE NOT EXISTS (SELECT 1 FROM acl_grants WHERE kind = ? AND id = ?)",
+                (kind, resource_id, principal_id, int(level), now, now, kind, resource_id),
+            )
+            return bool(cur.rowcount)
+
     async def revoke(self, kind: str, resource_id: str, principal_id: str) -> bool:
         """Remove a single grant. Returns True if a row was removed."""
         async with self._lock:

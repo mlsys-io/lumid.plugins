@@ -48,6 +48,22 @@ _POLICY = PermissionPolicy(
     # empty list, which is worse. JOB/ARTIFACT/TRACE/TABLE/OBJECT_PREFIX stay out:
     # they are per-principal and their filter IS the tenancy boundary.
     fleet_kinds=frozenset({ResourceKind.WORKER.value}),
+    # OBJECT_PREFIX is CHECKED on every job submit (routes/jobs.py
+    # _require_location_permission) but NEVER REGISTERED -- lumilake registers JOB,
+    # TRACE and ARTIFACT and nothing else. So the gate had no key: every non-admin
+    # got "write on object-prefix/<p> denied" with no scope, no grants API and no
+    # self-service path to satisfy it. Measured 2026-09-14 with a real role=user.
+    #
+    # Claim-on-first-use: the first principal to write an UNOWNED prefix becomes its
+    # owner, and every other principal is then denied by the ordinary grant check --
+    # so this opens self-service WITHOUT opening cross-tenant writes. The trade is
+    # name squatting: whoever submits first owns that prefix string. Accepted
+    # deliberately (operator decision 2026-09-14); the alternative was an
+    # admin-only job surface.
+    #
+    # TABLE is NOT claimable: a DB table is pre-existing shared infrastructure, so
+    # first-touch ownership there would hand a caller something they did not create.
+    claimable_kinds=frozenset({ResourceKind.OBJECT_PREFIX.value}),
     valid_kinds=frozenset(k.value for k in ResourceKind),
     valid_actions=frozenset(a.value for a in ResourceAction),
 )

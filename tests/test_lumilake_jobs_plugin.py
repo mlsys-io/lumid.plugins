@@ -502,3 +502,63 @@ async def test_lumilake_jobs_still_ownership_filtered(_ll_store) -> None:
     await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)
     got = await c.accessible_ids(_p("alice", "lumilake:jobs:read"), _RK.JOB.value, _RA.READ.value, log)
     assert got == frozenset({"job-alice"}), "jobs must stay per-principal"
+
+
+# --- Claim-on-first-use for OBJECT_PREFIX -------------------------------------
+# lumilake CHECKS object-prefix on every submit but never REGISTERS it, so before
+# this the gate had no key: every non-admin got "write on object-prefix/<p>
+# denied" with no scope and no grants API to fix it.
+
+
+async def test_object_prefix_claimed_by_first_writer(_ll_store) -> None:
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    ref = _ResourceRef(kind=_RK.OBJECT_PREFIX.value, id="probe")
+    # First writer is allowed AND becomes the owner.
+    await c.require(_p("alice", "lumilake:jobs:write"), ref, _RA.WRITE.value, log)
+    assert await _ll_store.get_level(_RK.OBJECT_PREFIX.value, "probe", "alice") is not None
+    # Repeat writes by the owner keep working through the ordinary grant path.
+    await c.require(_p("alice", "lumilake:jobs:write"), ref, _RA.WRITE.value, log)
+
+
+async def test_object_prefix_claim_does_not_open_cross_tenant_writes(_ll_store) -> None:
+    """The whole point: claiming must not become 'anyone can write anything'."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    ref = _ResourceRef(kind=_RK.OBJECT_PREFIX.value, id="alice-space")
+    await c.require(_p("alice", "lumilake:jobs:write"), ref, _RA.WRITE.value, log)
+    with _pytest.raises(Exception):
+        await c.require(_p("mallory", "lumilake:jobs:write"), ref, _RA.WRITE.value, log)
+
+
+async def test_object_prefix_claim_is_atomic_under_concurrency(_ll_store) -> None:
+    """Two simultaneous first-writers must not BOTH end up owning the prefix.
+
+    A read-then-write would let both observe 'unowned'; the store does it in one
+    INSERT ... WHERE NOT EXISTS, so exactly one wins.
+    """
+    import asyncio as _asyncio
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    ref = _ResourceRef(kind=_RK.OBJECT_PREFIX.value, id="racy")
+    results = await _asyncio.gather(
+        c.require(_p("alice", "lumilake:jobs:write"), ref, _RA.WRITE.value, log),
+        c.require(_p("bob", "lumilake:jobs:write"), ref, _RA.WRITE.value, log),
+        return_exceptions=True,
+    )
+    ok = [r for r in results if not isinstance(r, Exception)]
+    assert len(ok) == 1, f"exactly one claimer must win, got {len(ok)}"
+    owners = [
+        pid for pid in ("alice", "bob")
+        if await _ll_store.get_level(_RK.OBJECT_PREFIX.value, "racy", pid) is not None
+    ]
+    assert len(owners) == 1, f"exactly one owner must exist, got {owners}"
+
+
+async def test_table_is_not_claimable(_ll_store) -> None:
+    """TABLE is pre-existing shared infrastructure — first touch must NOT own it."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    ref = _ResourceRef(kind=_RK.TABLE.value, id="warehouse.public.events")
+    with _pytest.raises(Exception):
+        await c.require(_p("alice", "lumilake:jobs:write"), ref, _RA.WRITE.value, log)
