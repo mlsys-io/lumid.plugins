@@ -11,12 +11,11 @@ never grant-satisfiable. Lumilake has no cross-kind ownership indirection, so th
 ownership map is empty.
 
 WORKER is a **fleet kind**: it describes the shared FlowMesh fleet that no
-Lumilake principal owns, so holding ``lumilake:workers:read`` IS the authorization
-for reading workers -- ``accessible_ids`` imposes no ownership filter and a
-concrete-id read needs no grant. Other actions on a worker stay grant-only.
-Lumilake's ``ResourceKind`` has no NODE, so WORKER is the only one. Every other
-kind here is per-principal and must stay out of ``fleet_kinds`` -- their
-ownership filter is the tenancy boundary.
+Lumilake principal owns, so ``lumilake:workers:read`` alone authorizes reading
+workers, listed or by id; other actions stay grant-only. Lumilake's
+``ResourceKind`` has no NODE, so WORKER is the only one. Every other kind here
+is per-principal and must stay out of ``fleet_kinds`` -- their ownership filter
+is the tenancy boundary.
 """
 
 from lumilake_hook import ResourceAction, ResourceKind

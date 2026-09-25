@@ -505,7 +505,7 @@ async def test_lumilake_jobs_still_ownership_filtered(_ll_store) -> None:
 
 
 async def test_lumilake_worker_concrete_read_follows_scope(_ll_store) -> None:
-    """The scope that lists the fleet also reads one worker by id; without it, 403."""
+    """`lumilake:workers:read` reads a worker by id without a grant, but never writes."""
     c = _Checker(_ll_store)
     log = _logging.getLogger("t")
     await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
@@ -520,7 +520,7 @@ async def test_lumilake_worker_concrete_read_follows_scope(_ll_store) -> None:
 
 
 async def test_lumilake_job_concrete_read_still_needs_grant(_ll_store) -> None:
-    """The fleet exception must not leak to jobs: the jobs scope reads only your own."""
+    """The jobs scope must not read another principal's job by id."""
     c = _Checker(_ll_store)
     log = _logging.getLogger("t")
     await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)

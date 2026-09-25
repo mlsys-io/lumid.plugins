@@ -50,13 +50,13 @@ The FlowMesh adapter's `PermissionChecker` reads these scopes from the introspec
 |---|---|
 | `*` / `flowmesh:*` / `flowmesh:admin` | Admin bypass — all kinds, all actions. |
 | `flowmesh:workflows:read` / `flowmesh:tasks:read` / `flowmesh:results:read` / `flowmesh:system:read` | Call kind-level READ endpoints. Returned resources are filtered to those the principal holds a grant on. |
-| `flowmesh:nodes:read` / `flowmesh:workers:read` | Read every node / worker, both in lists and by id. Nodes and workers are shared fleet infrastructure registered by the fleet's own credential, so no per-resource grant is needed to read them. Reading a node includes the node's own view of the workers it manages. |
+| `flowmesh:nodes:read` / `flowmesh:workers:read` | Read every node / worker, listed or by id, with no per-resource grant (the fleet registers them under its own credential). Reading a node includes its view of the workers it manages. |
 | `flowmesh:workflows:write` | Create workflows. |
 | `flowmesh:nodes:write` | Register nodes. |
 | `flowmesh:workers:write` | Register workers. |
 | `flowmesh:results:write` | Upload task results and artifacts. |
 
-Concrete-id access requires a grant on the resource, except reading a node or worker, which the matching read scope above covers. Mutating a node or worker (for example, starting or stopping its workers) always requires a grant, whatever write scope the principal holds.
+Concrete-id access requires a grant on the resource, except node and worker reads (above). Mutating a node or worker, such as starting or stopping its workers, always requires a grant, whatever write scope the principal holds.
 
 ## Compatibility
 

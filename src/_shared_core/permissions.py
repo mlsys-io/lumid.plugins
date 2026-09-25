@@ -18,20 +18,17 @@ Policy resolution, in order:
   from that map is never grant-satisfiable. Kinds in ``policy.ownership_kind``
   resolve their grant against the owning kind of the same id.
 * **accessible_ids** returns the ids the principal can act on at the requested
-  action's level, or ``None`` for admins. It agrees with ``require``: a
-  concrete-id check passes exactly when ``accessible_ids`` is ``None`` or
-  contains the id -- except on a claimable kind, where ``require`` may claim
-  an unowned id that no listing included beforehand.
+  action's level, or ``None`` for admins. ``require`` on an id passes exactly
+  when this covers it, except that it may claim an unowned claimable-kind id.
 * **Fleet kinds** (``policy.fleet_kinds``) describe shared infrastructure that
   no principal owns -- a worker or a node is registered by the fleet's own
   credential, never granted to a human. Filtering those by ownership returns
   the empty set for every real user, so a healthy fleet renders as an empty
-  one while every layer below reports correct. For a fleet kind and an action
-  in ``policy.fleet_actions``, the kind-level scope IS the authorization: a
-  principal holding it may list the whole fleet (``accessible_ids`` returns
-  ``None``) and read any member by id. Other actions on a fleet kind, and
-  principals without the scope, fall back to grants like any other kind, so
-  mutating a worker or node still needs a grant on it.
+  one while every layer below reports correct. For an action in
+  ``policy.fleet_actions``, the kind-level scope IS the authorization, both for
+  listing (``accessible_ids`` returns ``None``) and by id. Everything else on a
+  fleet kind stays grant-only, so a kind-level write scope never opens mutation
+  of every member.
 
   Per-principal kinds (tasks, workflows, jobs) MUST NOT be listed there. Their
   ownership filter is the tenancy boundary: ``require`` only decides whether
@@ -59,14 +56,10 @@ class PermissionPolicy:
     ownership_kind: dict[str, str]
     valid_kinds: frozenset[str]
     valid_actions: frozenset[str]
-    # Kinds describing shared infrastructure rather than per-principal
-    # resources. For the actions in ``fleet_actions``, holding the kind-level
-    # scope IS the authorization and no ownership filter or grant applies.
-    # Empty by default, so a host must opt a kind in deliberately.
+    # Shared-infrastructure kinds (see module docstring). Empty by default, so a
+    # host must opt a kind in deliberately.
     fleet_kinds: frozenset[str] = frozenset()
-    # Actions the fleet-kind scope authorizes on its own, for listing and for
-    # concrete ids alike. Actions outside this set stay grant-only on fleet
-    # kinds, so a kind-level write scope never opens mutation of every member.
+    # Actions on a fleet kind that the kind-level scope authorizes without a grant.
     fleet_actions: frozenset[str] = frozenset()
     # Kinds the HOST never registers, where a concrete-id check would otherwise be
     # unsatisfiable for every non-admin. The first principal to touch an UNOWNED
@@ -180,8 +173,6 @@ class PermissionChecker:
     ) -> frozenset[str] | None:
         if self._is_admin(principal):
             return None
-        # Fleet kinds are owned by nobody, so an ownership filter would return
-        # the empty set to every scope holder -- see the module docstring.
         if self._holds_fleet_scope(principal, kind, action):
             return None
         policy = self._policy

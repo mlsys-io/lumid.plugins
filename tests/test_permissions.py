@@ -349,7 +349,6 @@ async def test_fleet_kinds_denied_without_scope(store: GrantStore, kind: str) ->
 
 @pytest.mark.parametrize("kind", [WORKER, NODE])
 async def test_fleet_kinds_without_scope_list_own_grants(store: GrantStore, kind: str) -> None:
-    """Without the scope a principal lists exactly what it may read by id: its grants."""
     checker = LumidPermissionChecker(store)
     logger = logging.getLogger("t")
     await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
@@ -375,10 +374,8 @@ async def test_per_principal_kinds_still_ownership_filtered(
     assert got == frozenset({"owned-by-alice"}), "scope must not widen to bob's rows"
 
 
-# Regression (mlsys-io/FlowMesh#148): a principal holding `flowmesh:workers:read`
-# listed every worker with its full record, yet `GET /workers/{id}` for one of
-# those same workers answered 403 -- the list honoured the fleet scope and the
-# concrete-id check still demanded a grant nobody but the fleet credential holds.
+# Regression (mlsys-io/FlowMesh#148): `flowmesh:workers:read` listed every
+# worker, yet `GET /workers/{id}` on one of them answered 403.
 
 _FLEET_SCOPES = {
     WORKER: ("flowmesh:workers:read", "flowmesh:workers:write"),
@@ -390,7 +387,6 @@ _FLEET_SCOPES = {
 async def test_fleet_kinds_concrete_read_with_kind_level_scope(
     store: GrantStore, logger: logging.Logger, kind: str
 ) -> None:
-    """The read scope that lists the fleet also reads any member by id."""
     checker = LumidPermissionChecker(store)
     read_scope, _ = _FLEET_SCOPES[kind]
     await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
@@ -441,7 +437,6 @@ async def test_fleet_kinds_require_agrees_with_accessible_ids(
     holds_scope: bool,
     grant_level: GrantLevel | None,
 ) -> None:
-    """`require` on an id passes exactly when `accessible_ids` covers that id."""
     checker = LumidPermissionChecker(store)
     read_scope, write_scope = _FLEET_SCOPES[kind]
     scopes = [read_scope if action == READ else write_scope] if holds_scope else []
@@ -468,7 +463,6 @@ async def test_fleet_kinds_require_agrees_with_accessible_ids(
 async def test_per_principal_kinds_concrete_read_still_needs_grant(
     store: GrantStore, logger: logging.Logger, kind: str, scope: str
 ) -> None:
-    """The fleet exception must not leak to per-principal kinds."""
     checker = LumidPermissionChecker(store)
     await store.grant(kind, "owned-by-bob", "bob", GrantLevel.WRITE)
     with pytest.raises(HTTPException) as exc:
