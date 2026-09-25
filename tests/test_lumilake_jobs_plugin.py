@@ -490,7 +490,7 @@ async def test_lumilake_workers_not_ownership_filtered(_ll_store) -> None:
     await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
     got = await c.accessible_ids(_p("alice", "lumilake:workers:read"), _RK.WORKER.value, _RA.READ.value, log)
     assert got is None, "worker list must not be ownership-filtered"
-    # and no scope still means no rows -- not a public read
+    # and no scope and no grant still means no rows -- not a public read
     assert await c.accessible_ids(_p("alice"), _RK.WORKER.value, _RA.READ.value, log) == frozenset()
 
 

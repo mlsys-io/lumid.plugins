@@ -340,11 +340,22 @@ async def test_fleet_kinds_unfiltered_with_kind_level_scope(
 
 @pytest.mark.parametrize("kind", [WORKER, NODE])
 async def test_fleet_kinds_denied_without_scope(store: GrantStore, kind: str) -> None:
-    """No kind-level scope still means no rows -- this is not a public read."""
+    """No kind-level scope and no grant means no rows -- this is not a public read."""
     checker = LumidPermissionChecker(store)
     logger = logging.getLogger("t")
     await store.grant(kind, "wkr-28", "admin", GrantLevel.WRITE)
     assert await checker.accessible_ids(_principal("alice"), kind, READ, logger) == frozenset()
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+async def test_fleet_kinds_without_scope_list_own_grants(store: GrantStore, kind: str) -> None:
+    """Without the scope a principal lists exactly what it may read by id: its grants."""
+    checker = LumidPermissionChecker(store)
+    logger = logging.getLogger("t")
+    await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
+    await store.grant(kind, "mine", "alice", GrantLevel.WRITE)
+    got = await checker.accessible_ids(_principal("alice"), kind, READ, logger)
+    assert got == frozenset({"mine"})
 
 
 @pytest.mark.parametrize(

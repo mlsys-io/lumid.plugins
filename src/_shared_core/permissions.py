@@ -20,7 +20,8 @@ Policy resolution, in order:
 * **accessible_ids** returns the ids the principal can act on at the requested
   action's level, or ``None`` for admins. It agrees with ``require``: a
   concrete-id check passes exactly when ``accessible_ids`` is ``None`` or
-  contains the id.
+  contains the id -- except on a claimable kind, where ``require`` may claim
+  an unowned id that no listing included beforehand.
 * **Fleet kinds** (``policy.fleet_kinds``) describe shared infrastructure that
   no principal owns -- a worker or a node is registered by the fleet's own
   credential, never granted to a human. Filtering those by ownership returns
@@ -59,9 +60,9 @@ class PermissionPolicy:
     valid_kinds: frozenset[str]
     valid_actions: frozenset[str]
     # Kinds describing shared infrastructure rather than per-principal
-    # resources. For these, holding the kind-level scope IS the authorization
-    # and ``accessible_ids`` imposes no ownership filter. Empty by default, so
-    # a host must opt a kind in deliberately.
+    # resources. For the actions in ``fleet_actions``, holding the kind-level
+    # scope IS the authorization and no ownership filter or grant applies.
+    # Empty by default, so a host must opt a kind in deliberately.
     fleet_kinds: frozenset[str] = frozenset()
     # Actions the fleet-kind scope authorizes on its own, for listing and for
     # concrete ids alike. Actions outside this set stay grant-only on fleet
