@@ -23,12 +23,15 @@ lives in ``_core.permissions``.
   A valid `(kind, action)` absent from the table is admin-only; an unrecognised
   kind or action is unsupported. Both deny.
 * **Fleet kinds** — WORKER and NODE are shared infrastructure that no principal
-  owns, so listing them is authorized by the kind-level scope alone rather than
-  by per-id grants. WORKFLOW/TASK/RESULT are deliberately excluded: they are
-  per-principal and their ownership filter is the tenancy boundary.
-* **Concrete-id checks** require a grant whose level covers the action: READ
-  needs `GrantLevel.READ`, mutating actions (WRITE, CANCEL) need
-  `GrantLevel.WRITE`. The `admin` action is never grant-satisfiable. RESULT has
+  owns, so reading them — the list and any single worker or node — is
+  authorized by `flowmesh:workers:read` / `flowmesh:nodes:read` alone rather
+  than by per-id grants. Writes stay grant-only: `flowmesh:nodes:write` does not
+  let a principal start, stop, or destroy workers on a node it holds no grant
+  on. WORKFLOW/TASK/RESULT are deliberately excluded: they are per-principal and
+  their ownership filter is the tenancy boundary.
+* **Concrete-id checks** (other than fleet reads) require a grant whose level
+  covers the action: READ needs `GrantLevel.READ`, mutating actions (WRITE,
+  CANCEL) need `GrantLevel.WRITE`. The `admin` action is never grant-satisfiable. RESULT has
   no grants of its own — ownership is inferred from the owning task, so a
   concrete RESULT check resolves against the TASK grant of the same id.
 """
@@ -68,6 +71,9 @@ _POLICY = PermissionPolicy(
     # are the authorization here. WORKFLOW/TASK/RESULT stay out: they are
     # per-principal and their filter is the tenancy boundary.
     fleet_kinds=frozenset({ResourceKind.WORKER.value, ResourceKind.NODE.value}),
+    # Only reads: a fleet-wide read scope may show every worker and node, but a
+    # kind-level write scope must not open mutation of every one of them.
+    fleet_actions=frozenset({ResourceAction.READ.value}),
     valid_kinds=frozenset(k.value for k in ResourceKind),
     valid_actions=frozenset(a.value for a in ResourceAction),
 )

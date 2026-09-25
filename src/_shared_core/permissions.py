@@ -14,18 +14,23 @@ Policy resolution, in order:
   ``policy.kind_level_scopes[(kind, action)]``. A recognised (kind, action)
   with no mapping is admin-only; an unrecognised one is unsupported. Both deny.
 * **Concrete-id checks** require a grant whose level covers the action
-  (``policy.required_level``). An action absent from that map is never
-  grant-satisfiable. Kinds in ``policy.ownership_kind`` resolve their grant
-  against the owning kind of the same id.
+  (``policy.required_level``), except for fleet reads (below). An action absent
+  from that map is never grant-satisfiable. Kinds in ``policy.ownership_kind``
+  resolve their grant against the owning kind of the same id.
 * **accessible_ids** returns the ids the principal can act on at the requested
-  action's level, or ``None`` for admins.
+  action's level, or ``None`` for admins. It agrees with ``require``: a
+  concrete-id check passes exactly when ``accessible_ids`` is ``None`` or
+  contains the id.
 * **Fleet kinds** (``policy.fleet_kinds``) describe shared infrastructure that
   no principal owns -- a worker or a node is registered by the fleet's own
   credential, never granted to a human. Filtering those by ownership returns
   the empty set for every real user, so a healthy fleet renders as an empty
-  one while every layer below reports correct. For these kinds the kind-level
-  scope IS the authorization: ``accessible_ids`` returns ``None`` when the
-  principal holds it and ``frozenset()`` when it does not.
+  one while every layer below reports correct. For a fleet kind and an action
+  in ``policy.fleet_actions``, the kind-level scope IS the authorization: a
+  principal holding it may list the whole fleet (``accessible_ids`` returns
+  ``None``) and read any member by id. Other actions on a fleet kind, and
+  principals without the scope, fall back to grants like any other kind, so
+  mutating a worker or node still needs a grant on it.
 
   Per-principal kinds (tasks, workflows, jobs) MUST NOT be listed there. Their
   ownership filter is the tenancy boundary: ``require`` only decides whether
@@ -58,6 +63,10 @@ class PermissionPolicy:
     # and ``accessible_ids`` imposes no ownership filter. Empty by default, so
     # a host must opt a kind in deliberately.
     fleet_kinds: frozenset[str] = frozenset()
+    # Actions the fleet-kind scope authorizes on its own, for listing and for
+    # concrete ids alike. Actions outside this set stay grant-only on fleet
+    # kinds, so a kind-level write scope never opens mutation of every member.
+    fleet_actions: frozenset[str] = frozenset()
     # Kinds the HOST never registers, where a concrete-id check would otherwise be
     # unsatisfiable for every non-admin. The first principal to touch an UNOWNED
     # resource of such a kind claims it (trust-on-first-use); everyone else is then
@@ -84,6 +93,13 @@ class PermissionChecker:
 
     def _recognised(self, kind: str, action: str) -> bool:
         return kind in self._policy.valid_kinds and action in self._policy.valid_actions
+
+    def _holds_fleet_scope(self, principal: PrincipalContext, kind: str, action: str) -> bool:
+        policy = self._policy
+        if kind not in policy.fleet_kinds or action not in policy.fleet_actions:
+            return False
+        required_scope = policy.kind_level_scopes.get((kind, action))
+        return required_scope is not None and required_scope in principal.scopes
 
     async def require(
         self,
@@ -113,6 +129,9 @@ class PermissionChecker:
             raise self._deny(
                 logger, f"unsupported {action} on {resource.kind}/{resource.id}"
             )
+
+        if self._holds_fleet_scope(principal, resource.kind, action):
+            return
 
         required_level = policy.required_level.get(action)
         if required_level is None:
@@ -160,14 +179,11 @@ class PermissionChecker:
     ) -> frozenset[str] | None:
         if self._is_admin(principal):
             return None
+        # Fleet kinds are owned by nobody, so an ownership filter would return
+        # the empty set to every scope holder -- see the module docstring.
+        if self._holds_fleet_scope(principal, kind, action):
+            return None
         policy = self._policy
-        # Fleet kinds are owned by nobody, so an ownership filter can only ever
-        # return the empty set for them -- see the module docstring.
-        if kind in policy.fleet_kinds:
-            required_scope = policy.kind_level_scopes.get((kind, action))
-            if required_scope is not None and required_scope in principal.scopes:
-                return None
-            return frozenset()
         required_level = policy.required_level.get(action)
         if required_level is None:
             # No grants can satisfy this action, so non-admins have no access.

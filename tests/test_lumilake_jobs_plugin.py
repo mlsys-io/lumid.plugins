@@ -504,6 +504,32 @@ async def test_lumilake_jobs_still_ownership_filtered(_ll_store) -> None:
     assert got == frozenset({"job-alice"}), "jobs must stay per-principal"
 
 
+async def test_lumilake_worker_concrete_read_follows_scope(_ll_store) -> None:
+    """The scope that lists the fleet also reads one worker by id; without it, 403."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
+    ref = _ResourceRef(kind=_RK.WORKER.value, id="wkr-1")
+    await c.require(_p("alice", "lumilake:workers:read"), ref, _RA.READ.value, log)
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice"), ref, _RA.READ.value, log)
+    assert exc.value.status_code == 403
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice", "lumilake:workers:read"), ref, _RA.WRITE.value, log)
+    assert exc.value.status_code == 403
+
+
+async def test_lumilake_job_concrete_read_still_needs_grant(_ll_store) -> None:
+    """The fleet exception must not leak to jobs: the jobs scope reads only your own."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)
+    ref = _ResourceRef(kind=_RK.JOB.value, id="job-bob")
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice", "lumilake:jobs:read"), ref, _RA.READ.value, log)
+    assert exc.value.status_code == 403
+
+
 # --- Claim-on-first-use for OBJECT_PREFIX -------------------------------------
 # lumilake CHECKS object-prefix on every submit but never REGISTERS it, so before
 # this the gate had no key: every non-admin got "write on object-prefix/<p>

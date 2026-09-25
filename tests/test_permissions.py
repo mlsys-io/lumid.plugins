@@ -362,3 +362,106 @@ async def test_per_principal_kinds_still_ownership_filtered(
     await store.grant(kind, "owned-by-bob", "bob", GrantLevel.READ)
     got = await checker.accessible_ids(_principal("alice", scope), kind, READ, logger)
     assert got == frozenset({"owned-by-alice"}), "scope must not widen to bob's rows"
+
+
+# Regression (mlsys-io/FlowMesh#148): a principal holding `flowmesh:workers:read`
+# listed every worker with its full record, yet `GET /workers/{id}` for one of
+# those same workers answered 403 -- the list honoured the fleet scope and the
+# concrete-id check still demanded a grant nobody but the fleet credential holds.
+
+_FLEET_SCOPES = {
+    WORKER: ("flowmesh:workers:read", "flowmesh:workers:write"),
+    NODE: ("flowmesh:nodes:read", "flowmesh:nodes:write"),
+}
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+async def test_fleet_kinds_concrete_read_with_kind_level_scope(
+    store: GrantStore, logger: logging.Logger, kind: str
+) -> None:
+    """The read scope that lists the fleet also reads any member by id."""
+    checker = LumidPermissionChecker(store)
+    read_scope, _ = _FLEET_SCOPES[kind]
+    await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
+    await checker.require(
+        _principal("alice", read_scope), ResourceRef(kind=kind, id="fleet-1"), READ, logger
+    )
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+async def test_fleet_kinds_concrete_read_denied_without_scope(
+    store: GrantStore, logger: logging.Logger, kind: str
+) -> None:
+    checker = LumidPermissionChecker(store)
+    await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
+    with pytest.raises(HTTPException) as exc:
+        await checker.require(
+            _principal("alice"), ResourceRef(kind=kind, id="fleet-1"), READ, logger
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+@pytest.mark.parametrize("action", [WRITE, CANCEL])
+async def test_fleet_kinds_concrete_mutation_still_needs_grant(
+    store: GrantStore, logger: logging.Logger, kind: str, action: str
+) -> None:
+    """A kind-level write scope must not open mutation of every worker or node."""
+    checker = LumidPermissionChecker(store)
+    read_scope, write_scope = _FLEET_SCOPES[kind]
+    await store.grant(kind, "fleet-1", "fleet", GrantLevel.WRITE)
+    await store.grant(kind, "mine", "alice", GrantLevel.WRITE)
+    alice = _principal("alice", read_scope, write_scope)
+    with pytest.raises(HTTPException) as exc:
+        await checker.require(alice, ResourceRef(kind=kind, id="fleet-1"), action, logger)
+    assert exc.value.status_code == 403
+    await checker.require(alice, ResourceRef(kind=kind, id="mine"), action, logger)
+
+
+@pytest.mark.parametrize("kind", [WORKER, NODE])
+@pytest.mark.parametrize("action", [READ, WRITE, CANCEL, ADMIN])
+@pytest.mark.parametrize("holds_scope", [True, False])
+@pytest.mark.parametrize("grant_level", [None, GrantLevel.READ, GrantLevel.WRITE])
+async def test_fleet_kinds_require_agrees_with_accessible_ids(
+    store: GrantStore,
+    logger: logging.Logger,
+    kind: str,
+    action: str,
+    holds_scope: bool,
+    grant_level: GrantLevel | None,
+) -> None:
+    """`require` on an id passes exactly when `accessible_ids` covers that id."""
+    checker = LumidPermissionChecker(store)
+    read_scope, write_scope = _FLEET_SCOPES[kind]
+    scopes = [read_scope if action == READ else write_scope] if holds_scope else []
+    alice = _principal("alice", *scopes)
+    await store.grant(kind, "granted", "fleet", GrantLevel.WRITE)
+    await store.grant(kind, "ungranted", "fleet", GrantLevel.WRITE)
+    if grant_level is not None:
+        await store.grant(kind, "granted", "alice", grant_level)
+
+    allowed = await checker.accessible_ids(alice, kind, action, logger)
+    for rid in ("granted", "ungranted"):
+        try:
+            await checker.require(alice, ResourceRef(kind=kind, id=rid), action, logger)
+            passed = True
+        except HTTPException:
+            passed = False
+        assert passed == (allowed is None or rid in allowed), (rid, allowed)
+
+
+@pytest.mark.parametrize(
+    ("kind", "scope"),
+    [(WF, "flowmesh:workflows:read"), (TASK, "flowmesh:tasks:read")],
+)
+async def test_per_principal_kinds_concrete_read_still_needs_grant(
+    store: GrantStore, logger: logging.Logger, kind: str, scope: str
+) -> None:
+    """The fleet exception must not leak to per-principal kinds."""
+    checker = LumidPermissionChecker(store)
+    await store.grant(kind, "owned-by-bob", "bob", GrantLevel.WRITE)
+    with pytest.raises(HTTPException) as exc:
+        await checker.require(
+            _principal("alice", scope), ResourceRef(kind=kind, id="owned-by-bob"), READ, logger
+        )
+    assert exc.value.status_code == 403
