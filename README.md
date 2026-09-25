@@ -34,7 +34,7 @@ Deploys must dereference the `_core` symlinks when copying the source tree (`cp 
 | Hook | Behaviour |
 |---|---|
 | `IdentityProvider` | Resolves bearer tokens via `POST {LUM_ID_BASE_URL}/oauth/introspect`. Accepts lum.id JWT and `lm_pat_*` PATs. Caches active introspect responses for 60 s, sha256-keyed, capped at 10 k entries. lum.id scopes pass through verbatim onto `PrincipalContext.scopes`. Stashes `principal_id → email` for later use by the usage sink. |
-| `PermissionChecker` | Admin-bypass + scope-driven kind-level checks + grant-driven concrete-id checks. See [Scope vocabulary](#scope-vocabulary) below. Reads grants from the SQLite ACL written by `ResourceRegistrar`. |
+| `PermissionChecker` | Admin-bypass + scope-driven kind-level checks + grant-driven concrete-id checks (node and worker reads are scope-driven). See [Scope vocabulary](#scope-vocabulary) below. Reads grants from the SQLite ACL written by `ResourceRegistrar`. |
 | `ResourceRegistrar` | Mirrors FlowMesh's resource lifecycle (`register` on create, `deregister` on hard-delete, `reconcile` at startup) into a SQLite grants table at `LUMID_ACL_DB_PATH`. The table is keyed by `(kind, id, principal_id)`, so multiple principals can hold grants on the same resource. `reconcile` runs as a single atomic transaction. Backed by the stdlib `sqlite3` module. |
 | `SubmissionGuard` | Optional GPU-rental balance preflight against Runmesh. Off by default (`LUMID_BALANCE_GUARD=on` to enable). Fails open on Runmesh outage. |
 | `UsageSink` | Mirrors usage rows to `POST {RUNMESH_BILLING_BASE_URL}/billing/flowmesh-entry` with `X-Bridge-Secret`. Forwards each row whose `principal_id` is in the email cache; rows without a cached email (anonymous or pre-restart principals) are skipped. One POST per row; failures logged and dropped. |
@@ -49,13 +49,14 @@ The FlowMesh adapter's `PermissionChecker` reads these scopes from the introspec
 | Scope | Grants |
 |---|---|
 | `*` / `flowmesh:*` / `flowmesh:admin` | Admin bypass — all kinds, all actions. |
-| `flowmesh:workflows:read` / `flowmesh:tasks:read` / `flowmesh:results:read` / `flowmesh:nodes:read` / `flowmesh:workers:read` / `flowmesh:system:read` | Call kind-level READ endpoints. Returned resources are filtered to those the principal holds a grant on. |
+| `flowmesh:workflows:read` / `flowmesh:tasks:read` / `flowmesh:results:read` / `flowmesh:system:read` | Call kind-level READ endpoints. Returned resources are filtered to those the principal holds a grant on. |
+| `flowmesh:nodes:read` / `flowmesh:workers:read` | Read every node / worker, listed or by id, with no per-resource grant (the fleet registers them under its own credential). Reading a node includes its view of the workers it manages. |
 | `flowmesh:workflows:write` | Create workflows. |
 | `flowmesh:nodes:write` | Register nodes. |
 | `flowmesh:workers:write` | Register workers. |
 | `flowmesh:results:write` | Upload task results and artifacts. |
 
-Concrete-id access requires a grant on the resource.
+Concrete-id access requires a grant on the resource, except node and worker reads (above). Mutating a node or worker, such as starting or stopping its workers, always requires a grant, whatever write scope the principal holds.
 
 ## Compatibility
 
@@ -112,7 +113,7 @@ Runtime deps (`httpx`, `pydantic`, `fastapi`, `lumid-hooks`, `flowmesh-hook`) sh
 | Hook | Behaviour |
 |---|---|
 | `IdentityProvider` | The same `LumidIdentityProvider` as the FlowMesh plugin — resolves bearers via `POST {LUM_ID_BASE_URL}/oauth/introspect`, returns a `lumid_hooks.PrincipalContext` with the token's scopes verbatim, caches introspect responses for 60 s. |
-| `PermissionChecker` | Admin-bypass + scope-driven kind-level checks + grant-driven concrete-id checks for every concrete resource kind Lumilake sends (typically JOB, TRACE, ARTIFACT). Reads grants from a local SQLite ACL store. |
+| `PermissionChecker` | Admin-bypass + scope-driven kind-level checks + grant-driven concrete-id checks for every concrete resource kind Lumilake sends (typically JOB, TRACE, ARTIFACT). Worker reads are authorized by `lumilake:workers:read` alone. Reads grants from a local SQLite ACL store. |
 | `ResourceRegistrar` | Mirrors resource lifecycle events (`register` on create, `deregister` on delete, `reconcile` at startup) into the SQLite grants table at `LUMID_ACL_DB_PATH`. Reconcile is scoped to the kinds present in the input set — TRACE and ARTIFACT grants are never dropped by a JOB-only reconcile sweep. |
 
 The plugin ensures the ACL DB parent directory exists and performs an explicit writability check during `install()`; if the DB is not writable it raises `RuntimeError` immediately rather than loading silently without a `PermissionChecker` registered.

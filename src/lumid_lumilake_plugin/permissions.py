@@ -11,10 +11,11 @@ never grant-satisfiable. Lumilake has no cross-kind ownership indirection, so th
 ownership map is empty.
 
 WORKER is a **fleet kind**: it describes the shared FlowMesh fleet that no
-Lumilake principal owns, so holding the kind-level scope IS the authorization and
-``accessible_ids`` imposes no ownership filter. Lumilake's ``ResourceKind`` has no
-NODE, so WORKER is the only one. Every other kind here is per-principal and must
-stay out of ``fleet_kinds`` -- their ownership filter is the tenancy boundary.
+Lumilake principal owns, so ``lumilake:workers:read`` alone authorizes reading
+workers, listed or by id; other actions stay grant-only. Lumilake's
+``ResourceKind`` has no NODE, so WORKER is the only one. Every other kind here
+is per-principal and must stay out of ``fleet_kinds`` -- their ownership filter
+is the tenancy boundary.
 """
 
 from lumilake_hook import ResourceAction, ResourceKind
@@ -48,6 +49,7 @@ _POLICY = PermissionPolicy(
     # empty list, which is worse. JOB/ARTIFACT/TRACE/TABLE/OBJECT_PREFIX stay out:
     # they are per-principal and their filter IS the tenancy boundary.
     fleet_kinds=frozenset({ResourceKind.WORKER.value}),
+    fleet_actions=frozenset({ResourceAction.READ.value}),
     # OBJECT_PREFIX is CHECKED on every job submit (routes/jobs.py
     # _require_location_permission) but NEVER REGISTERED -- lumilake registers JOB,
     # TRACE and ARTIFACT and nothing else. So the gate had no key: every non-admin
