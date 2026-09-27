@@ -490,7 +490,7 @@ async def test_lumilake_workers_not_ownership_filtered(_ll_store) -> None:
     await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
     got = await c.accessible_ids(_p("alice", "lumilake:workers:read"), _RK.WORKER.value, _RA.READ.value, log)
     assert got is None, "worker list must not be ownership-filtered"
-    # and no scope still means no rows -- not a public read
+    # and no scope and no grant still means no rows -- not a public read
     assert await c.accessible_ids(_p("alice"), _RK.WORKER.value, _RA.READ.value, log) == frozenset()
 
 
@@ -502,6 +502,32 @@ async def test_lumilake_jobs_still_ownership_filtered(_ll_store) -> None:
     await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)
     got = await c.accessible_ids(_p("alice", "lumilake:jobs:read"), _RK.JOB.value, _RA.READ.value, log)
     assert got == frozenset({"job-alice"}), "jobs must stay per-principal"
+
+
+async def test_lumilake_worker_concrete_read_follows_scope(_ll_store) -> None:
+    """`lumilake:workers:read` reads a worker by id without a grant, but never writes."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.WORKER.value, "wkr-1", "fleet", _GL.WRITE)
+    ref = _ResourceRef(kind=_RK.WORKER.value, id="wkr-1")
+    await c.require(_p("alice", "lumilake:workers:read"), ref, _RA.READ.value, log)
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice"), ref, _RA.READ.value, log)
+    assert exc.value.status_code == 403
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice", "lumilake:workers:read"), ref, _RA.WRITE.value, log)
+    assert exc.value.status_code == 403
+
+
+async def test_lumilake_job_concrete_read_still_needs_grant(_ll_store) -> None:
+    """The jobs scope must not read another principal's job by id."""
+    c = _Checker(_ll_store)
+    log = _logging.getLogger("t")
+    await _ll_store.grant(_RK.JOB.value, "job-bob", "bob", _GL.READ)
+    ref = _ResourceRef(kind=_RK.JOB.value, id="job-bob")
+    with _pytest.raises(HTTPException) as exc:
+        await c.require(_p("alice", "lumilake:jobs:read"), ref, _RA.READ.value, log)
+    assert exc.value.status_code == 403
 
 
 # --- Claim-on-first-use for OBJECT_PREFIX -------------------------------------
