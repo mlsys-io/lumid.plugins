@@ -7,6 +7,11 @@ import httpx
 from lumilake_hook import OptimizerHandle, RemoteOptimizer, validate_remote_url
 
 
+class OptimizerCatalogShapeError(RuntimeError):
+    """The optimizer URL answered, but not with ``{"types": [str]}``: it is
+    pointed at the wrong service. Retrying will not help."""
+
+
 class RemoteOptimizerProvider:
     """Lists + instantiates remote-hosted optimizers.
 
@@ -56,10 +61,10 @@ class RemoteOptimizerProvider:
             types = data.get("types")
             if isinstance(types, list) and all(isinstance(t, str) for t in types):
                 return types
-        raise RuntimeError(
+        raise OptimizerCatalogShapeError(
             f"unexpected response shape from {url}: "
             f"expected {{'types': [str]}}, got {data!r}"
         )
 
 
-__all__ = ["RemoteOptimizerProvider"]
+__all__ = ["OptimizerCatalogShapeError", "RemoteOptimizerProvider"]

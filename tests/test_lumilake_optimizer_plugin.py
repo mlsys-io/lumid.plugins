@@ -49,19 +49,57 @@ async def test_install_skips_optimizer_when_url_missing(
         assert bindings.optimizer_providers == ()
 
 
-async def test_install_raises_when_remote_unreachable(
+async def test_install_survives_unreachable_remote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An optimizer outage at boot must not take identity down with it."""
+    monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
+    monkeypatch.setenv("LUM_ID_BASE_URL", "https://lum.id")
+    monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setattr(plugin, "_CATALOG_BACKOFF_S", 0.0)
+
+    calls = 0
+
+    def down(url: str, **kwargs: Any) -> MagicMock:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("timed out")
+
+    with patch("httpx.get", side_effect=down):
+        async with plugin.install() as bindings:
+            assert calls == plugin._CATALOG_ATTEMPTS
+            assert len(bindings.identity_providers) == 1
+            assert len(bindings.optimizer_providers) == 1
+            provider = bindings.optimizer_providers[0]
+            # Still down: the error surfaces on use, with the URL.
+            with pytest.raises(RuntimeError) as exc:
+                provider.list_optimizers()
+            assert "/api/v1/optimizer" in str(exc.value)
+
+
+async def test_install_recovers_catalog_after_transient_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LUMILAKE_REMOTE_OPTIMIZER_URL", "https://oaas.example.com")
     monkeypatch.delenv("LUMILAKE_RUNTIME_TOKEN", raising=False)
+    monkeypatch.setattr(plugin, "_CATALOG_BACKOFF_S", 0.0)
 
-    with (
-        patch("httpx.get", side_effect=httpx.ConnectError("connection refused")),
-        pytest.raises(RuntimeError) as exc,
-    ):
-        async with plugin.install():
-            pass
-    assert "/api/v1/optimizer" in str(exc.value)
+    calls = 0
+
+    def flaky(url: str, **kwargs: Any) -> MagicMock:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ReadTimeout("timed out")
+        resp = MagicMock()
+        resp.json.return_value = {"types": ["halo-greedy"]}
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    with patch("httpx.get", side_effect=flaky):
+        async with plugin.install() as bindings:
+            assert calls == 2
+            assert bindings.optimizer_providers[0].list_optimizers() == ["halo-greedy"]
 
 
 async def test_install_returns_provider_with_remote_types(
@@ -228,9 +266,21 @@ async def test_install_response_shape_validation(
     mock_resp.json.return_value = body
     mock_resp.raise_for_status = MagicMock()
 
-    with patch("httpx.get", return_value=mock_resp), pytest.raises(RuntimeError) as exc:
-        async with plugin.install():
-            pass
+    calls = 0
+
+    def answer(url: str, **kwargs: Any) -> MagicMock:
+        nonlocal calls
+        calls += 1
+        return mock_resp
+
+    # A wrong-shaped catalog is a misconfigured URL: install still succeeds
+    # (identity must not depend on it), it is not retried, and the error
+    # surfaces on use.
+    with patch("httpx.get", side_effect=answer):
+        async with plugin.install() as bindings:
+            assert calls == 1
+            with pytest.raises(plugin_optimizer.OptimizerCatalogShapeError) as exc:
+                bindings.optimizer_providers[0].list_optimizers()
     assert "unexpected response shape" in str(exc.value)
 
 
